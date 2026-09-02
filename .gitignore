@@ -1,0 +1,28 @@
+# .gitignore para el proyecto ScalpMetalsEA (MQL5 / MetaTrader 5)
+
+# Binarios compilados (se generan automáticamente al compilar el .mq5 en MetaEditor;
+# no deben versionarse porque se regeneran desde el código fuente)
+*.ex4
+*.ex5
+
+# Archivos de depuración y símbolos del compilador
+*.dbg
+*.map
+
+# Logs, temporales y respaldos
+*.log
+*.tmp
+*.bak
+~$*
+
+# Archivos de sistema operativo Windows/macOS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Configuración de editores/IDE (opcional — descomenta si usas alguno de estos)
+.vscode/
+.idea/
+
+# Reportes/resultados del Strategy Tester (se regeneran en cada backtest)
+*.htm
