@@ -20,7 +20,7 @@
 //|  financiera. Validar en Strategy Tester y demo antes de real.     |
 //+------------------------------------------------------------------+
 #property copyright "Generado como asistencia técnica - no es asesoría financiera"
-#property version   "0.10"
+#property version   "1.00"
 
 #include <Trade\Trade.mqh>
 
