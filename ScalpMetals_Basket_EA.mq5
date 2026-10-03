@@ -88,23 +88,25 @@ enum ENUM_BASKET_STATE
 };
 
 //==================================================================
-// PALETA VISUAL (estándar del panel de MALLA / GW). Si se dispone del
-// include GW_ESTILO.mqh, estos valores pueden sustituirse por los suyos.
+// PALETA VISUAL: estándar GW de Antonio (GW_ESTILO.mqh v1, 01/10/2026),
+// RGB medidos del panel GW CRT v3.1. Copiados aquí para que el EA compile
+// sin depender del include. Acento = teal #14B8A6.
 //==================================================================
-#define GWB_FONDO_GRAFICO  C'8,14,26'
-#define GWB_FONDO_PANEL    C'12,24,44'
-#define GWB_FONDO_TITULO   C'18,36,64'
-#define GWB_BARRA_ESTADO   C'52,58,70'
-#define GWB_ACENTO         C'38,198,186'
-#define GWB_ACENTO_TENUE   C'24,120,114'
-#define GWB_TEXTO          C'206,212,222'
-#define GWB_TEXTO_TITULO   clrWhite
-#define GWB_TEXTO_ESTADO   C'236,238,242'
-#define GWB_NEUTRO         C'140,150,165'
-#define GWB_OK             C'72,214,132'
-#define GWB_AVISO          C'234,179,8'
-#define GWB_ALERTA         C'236,84,84'
-#define GWB_FUENTE_TITULO  "Segoe UI Semibold"
+#define GWB_FONDO_GRAFICO  C'8,10,16'      // fondo del gráfico
+#define GWB_FONDO_PANEL    C'11,17,31'     // cuerpo del recuadro
+#define GWB_FONDO_TITULO   C'14,23,40'     // franja del título
+#define GWB_BARRA_ESTADO   C'60,60,60'     // franja gris de estado
+#define GWB_ACENTO         C'20,184,166'   // línea bajo el título, secciones, valores
+#define GWB_ACENTO_TENUE   C'28,118,110'   // pie de página
+#define GWB_TEXTO          C'203,213,225'  // etiquetas
+#define GWB_TEXTO_TITULO   C'246,252,253'  // título
+#define GWB_TEXTO_ESTADO   C'210,210,210'  // texto de la barra de estado
+#define GWB_NEUTRO         C'148,163,184'  // "-", pendiente, ejes
+#define GWB_APAGADO        C'100,116,139'  // OFF, línea bid
+#define GWB_OK             C'16,185,129'   // OK / ganancia
+#define GWB_AVISO          C'234,179,8'    // amarillo del semáforo (MALLA v0.8.3)
+#define GWB_ALERTA         C'242,54,69'    // pérdida / alerta / vela bajista
+#define GWB_FUENTE_TITULO  "Consolas"      // sin negrita por objeto: el título va en blanco y 1 pt más grande
 
 //==================================================================
 // INPUTS
@@ -1737,20 +1739,20 @@ void LinesDelete()
 // Estilo del gráfico (como GW_EstiloGrafico de MALLA): solo colores, no toca nada más
 void ApplyChartStyle()
 {
+   ChartSetInteger(0, CHART_MODE, CHART_CANDLES);
+   ChartSetInteger(0, CHART_SHOW_GRID, false);
    ChartSetInteger(0, CHART_COLOR_BACKGROUND, GWB_FONDO_GRAFICO);
    ChartSetInteger(0, CHART_COLOR_FOREGROUND, GWB_NEUTRO);
-   ChartSetInteger(0, CHART_SHOW_GRID, false);
    ChartSetInteger(0, CHART_COLOR_GRID, GWB_FONDO_TITULO);
    ChartSetInteger(0, CHART_COLOR_CHART_UP, GWB_ACENTO);
-   ChartSetInteger(0, CHART_COLOR_CHART_DOWN, GWB_ALERTA);
    ChartSetInteger(0, CHART_COLOR_CANDLE_BULL, GWB_ACENTO);
+   ChartSetInteger(0, CHART_COLOR_CHART_DOWN, GWB_ALERTA);
    ChartSetInteger(0, CHART_COLOR_CANDLE_BEAR, GWB_ALERTA);
    ChartSetInteger(0, CHART_COLOR_CHART_LINE, GWB_ACENTO);
-   ChartSetInteger(0, CHART_COLOR_BID, GWB_NEUTRO);
-   ChartSetInteger(0, CHART_COLOR_ASK, GWB_AVISO);
-   ChartSetInteger(0, CHART_COLOR_VOLUME, GWB_ACENTO_TENUE);
+   ChartSetInteger(0, CHART_COLOR_VOLUME, GWB_FONDO_TITULO);
+   ChartSetInteger(0, CHART_COLOR_BID, GWB_APAGADO);
+   ChartSetInteger(0, CHART_COLOR_ASK, GWB_ALERTA);
    ChartSetInteger(0, CHART_COLOR_STOP_LEVEL, GWB_ALERTA);
-   ChartSetInteger(0, CHART_SHOW_ONE_CLICK, false);
    ChartRedraw(0);
 }
 
@@ -1965,7 +1967,7 @@ void PanelRender()
       if(g_drawnTxt[i] != s)
       {
          ObjectSetString(0, nm, OBJPROP_FONT, (g_lnKind[i] == 0 || g_lnKind[i] == 2) ? GWB_FUENTE_TITULO : InpPanelFuente);
-         ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, (g_lnKind[i] == 0 ? tam + 1 : (g_lnKind[i] == 1 && tam > 7 ? tam - 1 : tam)));
+         ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, (g_lnKind[i] == 0 ? tam + 1 : (g_lnKind[i] == 1 && tam > 7 ? tam - 1 : tam)));   // título +1 pt, sección -1 pt (GW_Recuadro / GW_Seccion)
          ObjectSetString(0, nm, OBJPROP_TEXT, s);
          g_drawnTxt[i] = s;
       }
