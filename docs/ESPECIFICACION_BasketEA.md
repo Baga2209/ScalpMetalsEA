@@ -1,6 +1,6 @@
 # Especificación: ScalpMetals Basket EA (XAUUSDc)
 
-Versión 0.1 · 2026-10-03 · Estado: borrador para revisión antes de codificar
+Versión 0.1 · 2026-10-03 · Estado: implementada en `ScalpMetals_Basket_EA.mq5` (pendiente de compilar y backtest)
 
 Este documento define la estrategia completa antes de escribir una línea de MQL5.
 Cada regla está numerada (R-xx) y cada parámetro configurable tiene nombre de
@@ -64,7 +64,7 @@ convención `Inp...` del EA actual.
 | Input | Defecto | Opciones / Notas |
 |---|---|---|
 | `InpDirectionMode` | `DIR_BOTH_BY_SIGNAL` | `DIR_BUY_ONLY`, `DIR_SELL_ONLY`, `DIR_BOTH_BY_SIGNAL`. Cambiar aquí de sell a buy sin tocar nada más. |
-| `InpAllowOppositeBasket` | false | Si true, puede haber una cesta BUY y una SELL abiertas a la vez. Desaconsejado: duplica el riesgo. |
+| (cestas opuestas simultáneas) | no | v0.1 gestiona una sola cesta a la vez. Una cesta BUY y una SELL simultáneas no están implementadas. |
 
 ### 3.3 Señal de entrada (dispara la ráfaga inicial)
 
@@ -155,7 +155,7 @@ Cómo se usan según la dirección:
 |---|---|---|
 | `InpWednesdayMode` | `WED_CLOSE_IF_POSITIVE` | `WED_IGNORE`: nada especial. `WED_NO_NEW_BASKETS`: no abre cestas nuevas desde `InpWednesdayCutoffHour`. `WED_CLOSE_IF_POSITIVE`: además, cierra la cesta antes del rollover si el neto ≥ 0. |
 | `InpWednesdayCutoffHour` | 20 | Hora del servidor. |
-| `InpSwapTripleDay` | 3 | Día de la semana del swap triple (1 = lunes). Algunos brókeres lo aplican el viernes. |
+| `InpSwapTripleDay` | 3 | Día de la semana del swap triple, convención MT5 (0 = domingo, 3 = miércoles, 5 = viernes). Algunos brókeres lo aplican el viernes. |
 
 ### 3.11 Filtros heredados del EA actual
 
@@ -251,9 +251,9 @@ Al cerrar la cesta, el EA lee las comisiones reales de los deals del historial y
 
 **R-16 Drawdown diario y global.** Heredados. Al alcanzarlos se cierra la cesta abierta y se bloquea la apertura hasta el reinicio correspondiente.
 
-**R-17 Dirección.** `DIR_BUY_ONLY` ignora señales de venta; `DIR_SELL_ONLY` ignora las de compra; `DIR_BOTH_BY_SIGNAL` toma la que dé la señal. Mientras haya una cesta abierta no se abre otra, salvo `InpAllowOppositeBasket`.
+**R-17 Dirección.** `DIR_BUY_ONLY` ignora señales de venta; `DIR_SELL_ONLY` ignora las de compra; `DIR_BOTH_BY_SIGNAL` toma la que dé la señal. Mientras haya una cesta abierta no se abre otra.
 
-**R-18 Modo manual.** Con `SIG_MANUAL` el EA no abre sola. Los botones del panel lanzan la ráfaga del escalón actual en la dirección pulsada. Promediado, cierre, stop y escalera funcionan igual que en automático.
+**R-18 Modo manual.** Con `SIG_MANUAL` el EA no abre sola. Los botones del panel lanzan la ráfaga del escalón actual en la dirección pulsada; el botón salta los filtros de sesión, noticias y miércoles (el usuario decide), pero respeta spread máximo, mercado abierto y límites de drawdown. Promediado, cierre, stop y escalera funcionan igual que en automático.
 
 ---
 
