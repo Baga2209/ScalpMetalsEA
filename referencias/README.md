@@ -14,3 +14,10 @@ Qué se revisará de cada bot:
 - Qué información muestra su recuadro y cómo la organiza.
 - Cómo calcula y muestra DD, TP de cesta, SL y pérdida del día.
 - Qué líneas dibuja en el gráfico.
+
+## Estándar visual GW
+
+- `Include/GW_ESTILO.mqh`: paleta y funciones de dibujo del estándar de Antonio. Va en `MQL5\Include\`.
+- `Scripts/APLICAR_ESTILO_GW.mq5`: script que pinta el gráfico activo con ese estándar. Va en `MQL5\Scripts\`.
+
+`ScalpMetals_Basket_EA.mq5` NO necesita el include: lleva la misma paleta copiada dentro y aplica el estilo al arrancar.
