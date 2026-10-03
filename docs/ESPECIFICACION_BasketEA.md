@@ -159,18 +159,58 @@ Cómo se usan según la dirección:
 
 ### 3.11 Filtros heredados del EA actual
 
-Sesiones horarias, spread máximo, ATR mínimo/máximo, rollover diario, bordes de
-semana y calendario económico se mantienen tal cual, con los mismos inputs. Solo
-cambia una cosa: bloquean **ráfagas nuevas** (inicial y promediado), nunca el
-cierre de una cesta ya abierta.
+Sesiones horarias, spread máximo, ATR mínimo/máximo, rollover diario y bordes de
+semana se mantienen tal cual, con los mismos inputs. Bloquean **ráfagas nuevas**
+(inicial y promediado), nunca el cierre de una cesta ya abierta.
+
+El filtro de noticias cambia a un modo con tres opciones:
+
+| Input | Defecto | Notas |
+|---|---|---|
+| `InpNewsMode` | `NEWS_CLOSE_IF_POSITIVE` | `NEWS_IGNORE`: sin filtro. `NEWS_BLOCK_ENTRIES`: bloquea ráfagas en la ventana alrededor de noticias de alto impacto. `NEWS_CLOSE_IF_POSITIVE`: además, si la próxima noticia cae dentro de la ventana "antes" y la cesta tiene neto ≥ 0, la cierra (R-12b). |
+| `InpNewsMinutesBefore` / `InpNewsMinutesAfter` | 15 / 15 | Ventana de bloqueo. |
+| `InpNewsCurrency` | USD | Divisa filtrada. |
+
+El calendario se consulta una vez por minuto. En el Strategy Tester no hay calendario, así que este filtro solo actúa en cuenta demo o real.
 
 ### 3.12 Panel y registro
 
 | Input | Defecto | Notas |
 |---|---|---|
-| `InpShowPanel` | true | Panel en el gráfico con: estado, escalón N, posiciones abiertas, precio medio, neto actual, objetivo, distancia al stop, próximo nivel de promediado, motivo de bloqueo. |
-| `InpPanelManualButtons` | true | Botones "Cerrar cesta", "Pausar", "Forzar ráfaga BUY", "Forzar ráfaga SELL". |
+| `InpShowPanel` | true | Panel en el gráfico organizado en bloques: CESTA, RESULTADO Y OBJETIVO, RIESGO Y STOP, CUENTA Y DRAWDOWN, FILTROS, BLOQUEO ACTUAL. Detalle en 3.13. |
+| `InpPanelManualButtons` | true | Botones "Cerrar cesta", "Pausar", "Ráfaga BUY", "Ráfaga SELL". |
 | `InpVerboseLogging` | true | Heredado. |
+| `InpDrawLines` | true | Dibujar las líneas de 3.13 en el gráfico. |
+| `InpLineEntryColor` | amarillo | Color de la línea de arranque de la cesta. |
+| `InpLineStopColor` | rojo | Color de la línea del stop de equity y del límite diario. |
+| `InpLineTargetColor` | verde | Color de la línea del objetivo. |
+| `InpLineAvgColor` | naranja | Color del precio medio. |
+| `InpLineNextLevelColor` | azul | Color del próximo nivel de promediado. |
+
+### 3.13 Contenido del panel y líneas del gráfico
+
+El panel se refresca una vez por segundo y muestra:
+
+- **CESTA.** Estado (sin cesta / abierta BUY o SELL con id y tiempo abierta / cerrando), escalón actual y a dónde va si gana o pierde, posiciones abiertas sobre capacidad, lotes totales y lote por posición, niveles de promediado usados y método, próximo nivel con distancia en puntos, precio y hora de arranque, precio medio y precio actual.
+- **RESULTADO Y OBJETIVO (TP).** Bruto, swap, comisión estimada, spread de cierre estimado, NETO en verde o rojo, meta de la cesta con su definición y cuánto falta, precio aproximado al que se alcanza la meta, barra de progreso.
+- **RIESGO Y STOP (SL).** Stop de equity en dinero y porcentaje, margen restante antes del stop, precio aproximado del stop, edad máxima y edad actual.
+- **CUENTA Y DRAWDOWN (DD).** Balance, equity, pico de equity, resultado del día en dinero y porcentaje frente al límite diario, precio aproximado al que se tocaría el límite diario, realizado hoy por este EA y cestas cerradas hoy, drawdown global frente a su límite, resultado de las últimas 10 cestas (G/P).
+- **FILTROS.** Sesión (dentro/fuera y próxima ventana), spread y ATR actuales frente a sus límites, noticias (bloqueo activo o próxima noticia de alto impacto con nombre y cuenta atrás), tratamiento del día de swap triple, rollover y corte del viernes.
+- **BLOQUEO ACTUAL.** Motivo por el que el EA no abre ráfagas en este momento, y si está pausado.
+
+Líneas en el gráfico mientras hay cesta abierta:
+
+| Línea | Color | Significado |
+|---|---|---|
+| Horizontal continua gruesa | amarillo | Precio medio de la primera ráfaga (arranque de la cesta). |
+| Vertical punteada | amarillo | Hora de arranque de la cesta. Se conserva al cerrar como historial. |
+| Horizontal punteada | naranja | Precio medio actual de la cesta. |
+| Horizontal continua gruesa | rojo | Precio aproximado al que el neto toca el stop de equity. Se recalcula cada segundo porque el swap lo mueve. |
+| Horizontal discontinua | rojo | Precio aproximado al que la equity tocaría el límite de pérdida diaria. |
+| Horizontal discontinua | verde | Precio aproximado al que el neto alcanza la meta. |
+| Horizontal punto-raya | azul | Próximo nivel de promediado detectado. |
+
+Los precios de stop y meta son aproximados: suponen que todas las posiciones se mueven el mismo número de puntos, y no incluyen el swap que se acumule después.
 
 ---
 
@@ -242,6 +282,8 @@ Al cerrar la cesta, el EA lee las comisiones reales de los deals del historial y
 **R-11 Edad máxima.** Si la cesta supera `InpMaxBasketAgeHours` y `neto ≥ 0`, se cierra. Si está en negativo, sigue esperando al objetivo o al stop.
 
 **R-12 Miércoles.** Según `InpWednesdayMode`, a partir de `InpWednesdayCutoffHour` del día `InpSwapTripleDay`: bloquea cestas nuevas y, si procede, cierra la cesta con neto ≥ 0 antes del rollover. El EA registra en el log el swap cobrado cada noche por cesta para que el histórico diga si conviene operar ese día.
+
+**R-12b Noticias.** Con `NEWS_CLOSE_IF_POSITIVE`, si la próxima noticia de alto impacto está a menos de `InpNewsMinutesBefore` minutos y el neto de la cesta es ≥ 0, se cierra la cesta. Si está en negativo, se mantiene y se confía en el stop de equity. Justificación: en oro, una noticia como el NFP o el IPC mueve el precio varias veces el ATR en segundos.
 
 **R-13 Resultado de la cesta.** Al quedar vacía, `resultado = Σ beneficio realizado neto de los deals`. Ganadora si > 0, perdedora si ≤ 0.
 
