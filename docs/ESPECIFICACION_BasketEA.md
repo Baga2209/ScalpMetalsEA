@@ -1,6 +1,6 @@
-# Especificación: ScalpMetals Basket EA (XAUUSDc)
+# Especificación: RAFAGA EA (XAUUSDc)
 
-Versión 0.1 · 2026-10-03 · Estado: implementada en `ScalpMetals_Basket_EA.mq5` (pendiente de compilar y backtest)
+Versión 0.1 · 2026-10-03 · Estado: implementada en `RAFAGA_EA.mq5` (pendiente de compilar y backtest)
 
 Este documento define la estrategia completa antes de escribir una línea de MQL5.
 Cada regla está numerada (R-xx) y cada parámetro configurable tiene nombre de
@@ -352,4 +352,4 @@ Al cerrar la cesta, el EA lee las comisiones reales de los deals del historial y
 
 ## 8. Qué se reutiliza del EA actual
 
-Filtros de mercado (módulo 1 completo), señal BB+RSI (módulo 2), cálculo de valor de punto y normalización de lote, variables globales de drawdown, envío de órdenes con reintentos y logging. El EA nuevo se escribe como archivo separado `ScalpMetals_Basket_EA.mq5` y el actual se conserva.
+Filtros de mercado (módulo 1 completo), señal BB+RSI (módulo 2), cálculo de valor de punto y normalización de lote, variables globales de drawdown, envío de órdenes con reintentos y logging. El EA nuevo se escribe como archivo separado `RAFAGA_EA.mq5` y el actual se conserva.

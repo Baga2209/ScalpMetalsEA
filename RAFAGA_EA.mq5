@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//|                                       ScalpMetals_Basket_EA.mq5   |
-//|  EA de cesta (basket) para XAUUSDc en MetaTrader 5                |
+//|                                                    RAFAGA_EA.mq5   |
+//|  RAFAGA: EA de cesta (basket) para XAUUSDc en MetaTrader 5        |
 //|                                                                    |
 //|  Implementa docs/ESPECIFICACION_BasketEA.md (v0.1). Las reglas    |
 //|  R-01..R-18 del documento se citan en los comentarios del código. |
@@ -113,7 +113,7 @@ enum ENUM_BASKET_STATE
 //==================================================================
 input group "=== IDENTIFICACIÓN ==="
 input long   InpMagicNumber        = 202610030;  // Número mágico (distinto del EA de posición única)
-input string InpTradeComment       = "SMBasket";  // Prefijo del comentario de las órdenes
+input string InpTradeComment       = "RAFAGA";    // Prefijo del comentario de las órdenes
 
 input group "=== DIRECCIÓN ==="
 input ENUM_DIRECTION_MODE InpDirectionMode = DIR_BOTH_BY_SIGNAL; // Dirección permitida
@@ -354,7 +354,7 @@ int OnInit()
    if(InpEstiloGrafico && !MQLInfoInteger(MQL_TESTER)) ApplyChartStyle();
    if(InpShowPanel) PanelCreate();
 
-   PrintFormat("ScalpMetals_Basket_EA iniciado en %s | Magic=%d | Estado=%s | Escalón N=%d | Cierre=%s | Niveles=%s | Dir=%s",
+   PrintFormat("RAFAGA iniciado en %s | Magic=%d | Estado=%s | Escalón N=%d | Cierre=%s | Niveles=%s | Dir=%s",
                _Symbol, (int)InpMagicNumber, EnumToString(g_state), g_ladderN,
                EnumToString(InpCloseMode), EnumToString(InpLevelMode), EnumToString(InpDirectionMode));
    return INIT_SUCCEEDED;
@@ -1129,8 +1129,8 @@ bool TradingPermitido()
 // Aviso: siempre al log; por push si está habilitado
 void Avisar(string texto)
 {
-   Print("BASKET AVISO: ", texto);
-   if(InpPush) SendNotification("Basket " + _Symbol + ": " + texto);
+   Print("RAFAGA AVISO: ", texto);
+   if(InpPush) SendNotification("RAFAGA " + _Symbol + ": " + texto);
 }
 
 // Latido "sigo viva" por push. Su silencio es la señal de que el terminal murió.
@@ -1153,7 +1153,7 @@ void Halt(string reason)
    GlobalVariableSet(GVA("GlobalHalted"), 1.0);
    string m = StringFormat("DETENIDA: %s | balance %.2f equity %.2f | %s", reason,
                            AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
-   Avisar(m); Alert("Basket ", m);
+   Avisar(m); Alert("RAFAGA ", m);
 }
 
 // Gestión por tick de la cesta abierta
@@ -1863,7 +1863,7 @@ string ScreenName()
 {
    string s = InpNombrePantalla;
    StringTrimLeft(s); StringTrimRight(s);
-   if(s == "") s = "BASKET " + _Symbol;
+   if(s == "") s = "RAFAGA";
    return s;
 }
 
@@ -2003,7 +2003,7 @@ void PanelRender()
       ObjectSetInteger(0, pie, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, pie, OBJPROP_HIDDEN, true);
       ObjectSetString(0, pie, OBJPROP_FONT, InpPanelFuente);
-      ObjectSetString(0, pie, OBJPROP_TEXT, "ScalpMetals Basket EA v1.00 - cesta con promediado y escalera");
+      ObjectSetString(0, pie, OBJPROP_TEXT, "RAFAGA v1.00 - cesta con promediado y escalera");
       ObjectSetInteger(0, pie, OBJPROP_COLOR, GWB_ACENTO_TENUE);
    }
    ObjectSetInteger(0, pie, OBJPROP_FONTSIZE, (tam > 7 ? tam - 2 : tam));
@@ -2079,7 +2079,7 @@ void PanelUpdate()
 
    // ---------- líneas del panel ----------
    g_lnN = 0;
-   L(StringFormat("SCALPMETALS BASKET  |  %s  |  %s  |  %s", _Symbol, ScreenName(), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)), 0);
+   L(StringFormat("RAFAGA  |  %s  |  %s  |  %s", _Symbol, ScreenName(), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)), 0);
    L(StringFormat("Oro %s    spread %d pts    ATR %.0f pts", DoubleToString(bid, _Digits), (int)spread, atrPts), 3, GWB_ACENTO);
 
    if(halted)

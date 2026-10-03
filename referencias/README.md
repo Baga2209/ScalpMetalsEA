@@ -20,4 +20,4 @@ Qué se revisará de cada bot:
 - `Include/GW_ESTILO.mqh`: paleta y funciones de dibujo del estándar de Antonio. Va en `MQL5\Include\`.
 - `Scripts/APLICAR_ESTILO_GW.mq5`: script que pinta el gráfico activo con ese estándar. Va en `MQL5\Scripts\`.
 
-`ScalpMetals_Basket_EA.mq5` NO necesita el include: lleva la misma paleta copiada dentro y aplica el estilo al arrancar.
+`RAFAGA_EA.mq5` NO necesita el include: lleva la misma paleta copiada dentro y aplica el estilo al arrancar.
