@@ -212,6 +212,22 @@ Líneas en el gráfico mientras hay cesta abierta:
 
 Los precios de stop y meta son aproximados: suponen que todas las posiciones se mueven el mismo número de puntos, y no incluyen el swap que se acumule después.
 
+### 3.14 Estilo visual y seguridad tomados de MALLA v0.8.3
+
+El EA de malla del usuario (su mejor EA hasta la fecha) marca el estándar visual. Se adoptan de él:
+
+- **Motor del panel.** Recuadro azul marino con franja de título, línea teal, secciones en teal, renglones en gris claro, barra gris de estado ("SIN CESTA" / "CESTA ABIERTA"), pie de página, letra Consolas escalada por DPI, redibujo solo de los renglones que cambian y máximo dos refrescos por segundo. Inputs `InpPanelTam`, `InpPanelFuente`.
+- **Estilo del gráfico.** `InpEstiloGrafico` pinta fondo oscuro, velas teal/rojo y sin cuadrícula al arrancar. No se aplica en el Strategy Tester.
+- **Nombre grande abajo a la derecha.** `InpNombrePantalla` en verde operando; en rojo con "DETENIDA" o "PAUSADA" cuando no opera.
+- **Línea de stop-out del bróker** (magenta, `InpSO_Linea`). Precio al que el bróker liquidaría con el capital de este momento, calculado con equity y margen de toda la cuenta y todas las posiciones del símbolo. Si la cuenta tiene crédito o bono, una segunda línea naranja marca dónde el capital propio llega a cero. Es distinta del stop de equity de la cesta: ese es nuestro, este es el real.
+- **Bloque MARGEN.** Equity, margen, nivel de margen, crédito, margin call y stop-out que informa el bróker.
+- **Semáforo.** Verde, amarillo o rojo según el consumo del stop de cesta, del límite diario y el nivel de margen (`InpAviso_ML`, `InpAlarma_ML`).
+- **Freno de cuenta muerta.** Detención total si el bróker liquida por stop-out (detectado por el motivo del deal), si el balance baja de `InpBalanceMin`, si una orden es rechazada por falta de dinero, o tras `InpMaxRechazos` rechazos seguidos. La detención persiste en la variable global y solo se sale recargando el EA tras revisar la cuenta.
+- **AutoTrading apagado.** No se envía ninguna orden y el panel lo muestra en rojo. No cuenta como rechazo.
+- **Avisos push** (`InpPush`) al abrir y cerrar cestas, en el stop de equity y en cualquier detención, y latido "sigo viva" cada `InpLatidoMin` minutos. Su silencio avisa de que el terminal murió.
+
+No se adopta el modo observador de MALLA: este EA reconstruye la cesta al recargar.
+
 ---
 
 ## 4. Reglas de la estrategia

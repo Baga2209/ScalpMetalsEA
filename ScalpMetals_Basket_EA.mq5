@@ -88,6 +88,25 @@ enum ENUM_BASKET_STATE
 };
 
 //==================================================================
+// PALETA VISUAL (estándar del panel de MALLA / GW). Si se dispone del
+// include GW_ESTILO.mqh, estos valores pueden sustituirse por los suyos.
+//==================================================================
+#define GWB_FONDO_GRAFICO  C'8,14,26'
+#define GWB_FONDO_PANEL    C'12,24,44'
+#define GWB_FONDO_TITULO   C'18,36,64'
+#define GWB_BARRA_ESTADO   C'52,58,70'
+#define GWB_ACENTO         C'38,198,186'
+#define GWB_ACENTO_TENUE   C'24,120,114'
+#define GWB_TEXTO          C'206,212,222'
+#define GWB_TEXTO_TITULO   clrWhite
+#define GWB_TEXTO_ESTADO   C'236,238,242'
+#define GWB_NEUTRO         C'140,150,165'
+#define GWB_OK             C'72,214,132'
+#define GWB_AVISO          C'234,179,8'
+#define GWB_ALERTA         C'236,84,84'
+#define GWB_FUENTE_TITULO  "Segoe UI Semibold"
+
+//==================================================================
 // INPUTS
 //==================================================================
 input group "=== IDENTIFICACIÓN ==="
@@ -194,9 +213,25 @@ input int    InpNewsMinutesAfter     = 15;    // Minutos de bloqueo después
 input string InpNewsCurrency         = "USD"; // Divisa filtrada
 
 input group "=== PANEL Y REGISTRO ==="
-input bool   InpShowPanel            = true;  // Mostrar panel en el gráfico
-input bool   InpPanelManualButtons   = true;  // Mostrar botones manuales
-input bool   InpVerboseLogging       = true;  // Registrar motivos de bloqueo
+input bool   InpShowPanel            = true;       // Mostrar panel en el gráfico
+input int    InpPanelTam             = 10;         // Tamaño de letra del panel (subir si se ve chico)
+input string InpPanelFuente          = "Consolas"; // Fuente del panel (monoespaciada)
+input bool   InpPanelManualButtons   = true;       // Mostrar botones manuales
+input bool   InpEstiloGrafico        = true;       // Pintar el gráfico con el estilo del panel al arrancar
+input bool   InpNombreVer            = true;       // Nombre grande abajo a la derecha
+input string InpNombrePantalla       = "";         //    ... texto (vacío = BASKET + símbolo)
+input int    InpNombreTam            = 28;         //    ... tamaño de letra
+input double InpAviso_ML             = 300.0;      // Semáforo AMARILLO si nivel de margen <= %
+input double InpAlarma_ML            = 150.0;      // Semáforo ROJO si nivel de margen <= %
+input bool   InpSO_Linea             = true;       // Línea del stop-out del bróker (magenta)
+input color  InpLineStopOutColor     = clrMagenta; //    ... color
+input bool   InpVerboseLogging       = true;       // Registrar motivos de bloqueo
+
+input group "=== FRENO DE CUENTA Y AVISOS ==="
+input double InpBalanceMin           = 0.0;    // Detener si el balance baja de esto (0 = sin freno)
+input int    InpMaxRechazos          = 20;     // Detener tras N órdenes rechazadas seguidas
+input bool   InpPush                 = false;  // Avisos push (requiere MetaQuotes ID en Opciones > Notificaciones)
+input int    InpLatidoMin            = 0;      // Latido "sigo viva" cada N minutos por push (0 = no)
 
 input group "=== LÍNEAS EN EL GRÁFICO ==="
 input bool   InpDrawLines            = true;          // Dibujar líneas de la cesta en el gráfico
@@ -244,6 +279,11 @@ datetime g_newsNextTime    = 0;
 string   g_newsNextName    = "";
 double   g_hist[10];                 // resultados de las últimas cestas (0 = más reciente)
 int      g_histN           = 0;
+ulong    g_lastPanelMs     = 0;
+string   g_haltReason      = "";     // motivo de la detención (freno)
+int      g_rechazos        = 0;      // órdenes rechazadas seguidas
+bool     g_stopOutSeen     = false;  // el bróker liquidó algo nuestro (DEAL_REASON_SO)
+datetime g_lastHeartbeat   = 0;
 datetime g_lastSwapLogDay  = 0;
 
 struct BasketStats
@@ -309,6 +349,7 @@ int OnInit()
    LoadBasketState();          // R-15
    ReconstructFromPositions(); // R-15
 
+   if(InpEstiloGrafico && !MQLInfoInteger(MQL_TESTER)) ApplyChartStyle();
    if(InpShowPanel) PanelCreate();
 
    PrintFormat("ScalpMetals_Basket_EA iniciado en %s | Magic=%d | Estado=%s | Escalón N=%d | Cierre=%s | Niveles=%s | Dir=%s",
@@ -344,13 +385,33 @@ void OnTick()
    bool globalHalted = IsGlobalDrawdownExceeded();
    bool dailyHalted  = IsDailyDrawdownExceeded();
 
+   // Freno (tomado de MALLA v0.7): stop-out del bróker visto en OnTradeTransaction,
+   // balance mínimo, o demasiados rechazos seguidos -> detención total.
+   if(g_stopOutSeen && !globalHalted)
+      Halt("STOP-OUT del bróker: liquidó posiciones de esta cesta");
+   if(!globalHalted && InpBalanceMin > 0.0 && g_state == ST_IDLE && AccountInfoDouble(ACCOUNT_BALANCE) < InpBalanceMin)
+      Halt(StringFormat("balance %.2f por debajo del mínimo %.2f", AccountInfoDouble(ACCOUNT_BALANCE), InpBalanceMin));
+   globalHalted = IsGlobalDrawdownExceeded();
+
    if(globalHalted)
    {
       HandleGlobalHalt();
-      g_blockReason = "DETENIDO: drawdown global";
+      g_blockReason = "DETENIDA: " + (g_haltReason == "" ? "drawdown global" : g_haltReason);
       PanelUpdate();
       return;
    }
+
+   // AutoTrading apagado: no se envía NADA (ni ráfagas ni cierres); se espera y se muestra.
+   if(!TradingPermitido())
+   {
+      static datetime lastATWarn = 0;
+      if(TimeCurrent() - lastATWarn >= 300) { lastATWarn = TimeCurrent(); Print("AutoTrading apagado: en espera, no se envían órdenes."); }
+      g_blockReason = "AutoTrading APAGADO";
+      PanelUpdate();
+      return;
+   }
+
+   Heartbeat();
 
    // --- Gestión de la cesta abierta (R-07..R-12): cada tick, sin filtros de sesión ---
    if(g_state == ST_OPEN || g_state == ST_CLOSING)
@@ -421,6 +482,26 @@ void OnTick()
       g_blockReason = "PAUSADO por el usuario";
 
    PanelUpdate();
+}
+
+//+------------------------------------------------------------------+
+//| OnTradeTransaction — detecta liquidación por stop-out del bróker  |
+//| (DEAL_REASON_SO) sobre nuestras posiciones. Tomado de MALLA v0.7. |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   if(trans.symbol != _Symbol) return;
+   if(!HistoryDealSelect(trans.deal)) return;
+   if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagicNumber) return;
+   if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY) == DEAL_ENTRY_IN) return;
+   if((ENUM_DEAL_REASON)HistoryDealGetInteger(trans.deal, DEAL_REASON) == DEAL_REASON_SO)
+   {
+      g_stopOutSeen = true;
+      PrintFormat("STOP-OUT del bróker: deal #%I64u %.2f lotes @ %s profit %.2f", trans.deal,
+                  HistoryDealGetDouble(trans.deal, DEAL_VOLUME), DoubleToString(HistoryDealGetDouble(trans.deal, DEAL_PRICE), _Digits),
+                  HistoryDealGetDouble(trans.deal, DEAL_PROFIT));
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -936,9 +1017,9 @@ void StartBasket(int dir, bool isManual)
    SaveBasketState();
 
    int burst = MathMin(g_ladderN, capacity);
-   PrintFormat("=== CESTA #%I64d ABIERTA (%s, %s) | N=%d | lote/pos=%.2f | capacidad=%d | riesgo=%.2f (%.2f%%) ===",
+   Avisar(StringFormat("=== CESTA #%I64d ABIERTA (%s, %s) | N=%d | lote/pos=%.2f | capacidad=%d | riesgo=%.2f (%.2f%%) ===",
                g_basketId, (dir > 0 ? "BUY" : "SELL"), (isManual ? "manual" : "auto"),
-               burst, lotPerPos, capacity, riskMoney, EffectiveRiskPercent());
+               burst, lotPerPos, capacity, riskMoney, EffectiveRiskPercent()));
 
    double avgFill = 0.0;
    int opened = OpenBurst(dir, burst, lotPerPos, 0, avgFill);
@@ -1007,6 +1088,7 @@ bool SendMarketOrder(ENUM_ORDER_TYPE type, double lots, string comment, double &
       {
          fillPrice = trade.ResultPrice();
          if(fillPrice <= 0.0) fillPrice = price;
+         g_rechazos = 0;
          return true;
       }
       if(rc == TRADE_RETCODE_REQUOTE || rc == TRADE_RETCODE_PRICE_CHANGED ||
@@ -1017,9 +1099,59 @@ bool SendMarketOrder(ENUM_ORDER_TYPE type, double lots, string comment, double &
          continue;
       }
       PrintFormat("ERROR orden %s: retcode=%d (%s). Sin reintento.", EnumToString(type), rc, trade.ResultRetcodeDescription());
+      CountRejection(rc);
       return false;
    }
+   CountRejection(trade.ResultRetcode());
    return false;
+}
+
+// Rechazo de orden (tomado de MALLA v0.7): [No money] detiene de inmediato; el resto tras N seguidos.
+// AutoTrading apagado o mercado cerrado no cuentan como rechazo.
+void CountRejection(uint rc)
+{
+   if(rc == TRADE_RETCODE_CLIENT_DISABLES_AT || rc == TRADE_RETCODE_SERVER_DISABLES_AT ||
+      rc == TRADE_RETCODE_TRADE_DISABLED || rc == TRADE_RETCODE_MARKET_CLOSED) return;
+   g_rechazos++;
+   if(rc == TRADE_RETCODE_NO_MONEY)
+      Halt(StringFormat("el bróker rechazó una orden por falta de dinero [No money] (retcode %u)", rc));
+   else if(g_rechazos >= InpMaxRechazos)
+      Halt(StringFormat("%d órdenes rechazadas seguidas (último retcode %u)", g_rechazos, rc));
+}
+
+bool TradingPermitido()
+{
+   return ((bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
+}
+
+// Aviso: siempre al log; por push si está habilitado
+void Avisar(string texto)
+{
+   Print("BASKET AVISO: ", texto);
+   if(InpPush) SendNotification("Basket " + _Symbol + ": " + texto);
+}
+
+// Latido "sigo viva" por push. Su silencio es la señal de que el terminal murió.
+void Heartbeat()
+{
+   if(!InpPush || InpLatidoMin <= 0) return;
+   if(TimeCurrent() - g_lastHeartbeat < InpLatidoMin * 60) return;
+   g_lastHeartbeat = TimeCurrent();
+   BasketStats s; ComputeBasketStats(s);
+   Avisar(StringFormat("viva | bal %.2f eq %.2f | %s | pos %d lotes %.2f neto %.2f | N=%d",
+          AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY), EnumToString(g_state), s.count, s.lots, s.net, g_ladderN));
+}
+
+// Detención total con motivo. Persiste en GlobalHalted; solo se sale recargando el EA
+// tras borrar la variable global o revisando la cuenta.
+void Halt(string reason)
+{
+   if(GVGetOrInit(GVA("GlobalHalted"), 0.0) >= 1.0 && g_haltReason != "") return;
+   g_haltReason = reason;
+   GlobalVariableSet(GVA("GlobalHalted"), 1.0);
+   string m = StringFormat("DETENIDA: %s | balance %.2f equity %.2f | %s", reason,
+                           AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS));
+   Avisar(m); Alert("Basket ", m);
 }
 
 // Gestión por tick de la cesta abierta
@@ -1038,7 +1170,7 @@ void ManageBasket(bool dailyHalted)
    // R-10: stop de equity. Prioridad absoluta, por tick, ignora filtros.
    if(s.netPreTax <= -g_riskMoney)
    {
-      PrintFormat("STOP DE EQUITY: neto %.2f <= -%.2f", s.netPreTax, g_riskMoney);
+      Avisar(StringFormat("STOP DE EQUITY: neto %.2f <= -%.2f", s.netPreTax, g_riskMoney));
       CloseBasket("Stop de equity de la cesta");
       return;
    }
@@ -1224,9 +1356,9 @@ void FinalizeBasketIfEmpty()
    else
       g_ladderN = MathMax(g_ladderN - InpLadderStep, InpLadderStart);
 
-   PrintFormat("=== CESTA #%I64d CERRADA | resultado neto realizado %.2f (%s) | escalera %d -> %d%s ===",
+   Avisar(StringFormat("=== CESTA #%I64d CERRADA | resultado neto realizado %.2f (%s) | escalera %d -> %d%s ===",
                g_basketId, result, (winner ? "GANADORA" : "PERDEDORA"), before, g_ladderN,
-               (g_manualClose ? " (manual, sin cambio)" : ""));
+               (g_manualClose ? " (manual, sin cambio)" : "")));
 
    PushHistory(result);
    LinesDelete();
@@ -1459,9 +1591,10 @@ void HandleGlobalHalt()
 {
    if(!g_globalHaltAlerted)
    {
-      string msg = StringFormat("[%s] LÍMITE DE DRAWDOWN GLOBAL (%.2f%%). EA DETENIDO. ", _Symbol, InpMaxGlobalDrawdownPercent);
+      if(g_haltReason == "") g_haltReason = StringFormat("límite de drawdown global %.2f%%", InpMaxGlobalDrawdownPercent);
+      string msg = StringFormat("[%s] EA DETENIDO: %s. ", _Symbol, g_haltReason);
       msg += InpCloseAllOnGlobalLimit ? "Cerrando la cesta." : "La cesta se mantiene: revisar manualmente.";
-      Print(msg); Alert(msg);
+      Avisar(msg); Alert(msg);
       g_globalHaltAlerted = true;
    }
    if(InpCloseAllOnGlobalLimit && g_state != ST_IDLE)
@@ -1472,67 +1605,68 @@ void HandleGlobalHalt()
 }
 
 //+------------------------------------------------------------------+
-//|  PANEL Y LÍNEAS EN EL GRÁFICO (3.12)                               |
-//|  Objetos: BG (fondo), Rnn (filas), Btn* (botones),                |
-//|  HL_* (líneas horizontales de la cesta activa),                   |
-//|  VLS_<id> (línea vertical del arranque; se conserva al cerrar).   |
+//|  PANEL ESTILO GW, LÍNEAS Y PANTALLA (3.12 / 3.13)                  |
+//|  Motor tomado del diseño de MALLA v0.8.3: recuadro con franja de  |
+//|  título, línea teal, secciones en teal, barra gris de estado,     |
+//|  pie de página, letra escalada por DPI y redibujo solo de lo que  |
+//|  cambia. SOLO DIBUJA: aquí no se envía ni cierra ninguna orden.    |
+//|  Objetos: BG/TIT/LIN/BAR (fondo), Rnn (renglones), PIE, Btn*,      |
+//|  NOMBRE/ESTADO (esquina inferior derecha),                         |
+//|  HL_* (líneas de la cesta), VLS_<id> (arranques, se conservan).    |
 //+------------------------------------------------------------------+
-int g_panelRow = 0;
+#define PNL_MAX 64
+string g_lnTxt[PNL_MAX]; int g_lnKind[PNL_MAX]; color g_lnCol[PNL_MAX]; int g_lnN = 0;
+string g_drawnTxt[PNL_MAX]; int g_drawnY[PNL_MAX]; color g_drawnCol[PNL_MAX]; int g_drawnN = 0;
+bool   g_pnlBgCreated = false;
 
-void PanelRow(int &y, string text, color clr = clrWhite, int lineHeight = 14)
+// kind: 0 título, 1 sección, 2 barra de estado, 3 normal, 4 vacío
+void L(string text, int kind = 3, color clr = clrNONE)
 {
-   string full = PANEL_PREFIX + StringFormat("R%02d", g_panelRow++);
-   if(ObjectFind(0, full) < 0)
-   {
-      ObjectCreate(0, full, OBJ_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, full, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, full, OBJPROP_XDISTANCE, 14);
-      ObjectSetInteger(0, full, OBJPROP_FONTSIZE, 9);
-      ObjectSetString(0, full, OBJPROP_FONT, "Consolas");
-      ObjectSetInteger(0, full, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, full, OBJPROP_HIDDEN, true);
-   }
-   ObjectSetInteger(0, full, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, full, OBJPROP_COLOR, clr);
-   ObjectSetString(0, full, OBJPROP_TEXT, text);
-   y += lineHeight;
+   if(g_lnN >= PNL_MAX) return;
+   g_lnTxt[g_lnN] = text; g_lnKind[g_lnN] = kind;
+   if(clr == clrNONE)
+      clr = (kind == 0 ? GWB_TEXTO_TITULO : (kind == 1 ? GWB_ACENTO : (kind == 2 ? GWB_TEXTO_ESTADO : GWB_TEXTO)));
+   g_lnCol[g_lnN] = clr;
+   g_lnN++;
 }
 
-void PanelBackground(int height)
+void RectPanel(string name, int x, int y, int w, int h, color c)
 {
-   string full = PANEL_PREFIX + "BG";
+   string full = PANEL_PREFIX + name;
    if(ObjectFind(0, full) < 0)
    {
       ObjectCreate(0, full, OBJ_RECTANGLE_LABEL, 0, 0, 0);
       ObjectSetInteger(0, full, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, full, OBJPROP_XDISTANCE, 6);
-      ObjectSetInteger(0, full, OBJPROP_YDISTANCE, 14);
-      ObjectSetInteger(0, full, OBJPROP_XSIZE, 520);
-      ObjectSetInteger(0, full, OBJPROP_BGCOLOR, C'18,20,28');
       ObjectSetInteger(0, full, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-      ObjectSetInteger(0, full, OBJPROP_COLOR, C'70,80,100');
       ObjectSetInteger(0, full, OBJPROP_BACK, false);
       ObjectSetInteger(0, full, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, full, OBJPROP_HIDDEN, true);
    }
-   ObjectSetInteger(0, full, OBJPROP_YSIZE, height);
+   ObjectSetInteger(0, full, OBJPROP_BGCOLOR, c);
+   ObjectSetInteger(0, full, OBJPROP_COLOR, c);
+   ObjectSetInteger(0, full, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, full, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, full, OBJPROP_XSIZE, (w > 0 ? w : 1));
+   ObjectSetInteger(0, full, OBJPROP_YSIZE, (h > 0 ? h : 1));
 }
 
-void PanelButton(string name, int x, int y, string text, color bg)
+void PanelButton(string name, int x, int y, int w, int h, string text, color bg, int fontSize)
 {
    string full = PANEL_PREFIX + name;
    if(ObjectFind(0, full) < 0)
    {
       ObjectCreate(0, full, OBJ_BUTTON, 0, 0, 0);
       ObjectSetInteger(0, full, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, full, OBJPROP_XSIZE, 118);
-      ObjectSetInteger(0, full, OBJPROP_YSIZE, 24);
-      ObjectSetInteger(0, full, OBJPROP_FONTSIZE, 8);
       ObjectSetInteger(0, full, OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, full, OBJPROP_BORDER_COLOR, GWB_ACENTO_TENUE);
       ObjectSetInteger(0, full, OBJPROP_HIDDEN, true);
+      ObjectSetString(0, full, OBJPROP_FONT, InpPanelFuente);
    }
    ObjectSetInteger(0, full, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, full, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, full, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, full, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, full, OBJPROP_FONTSIZE, fontSize);
    ObjectSetInteger(0, full, OBJPROP_BGCOLOR, bg);
    ObjectSetString(0, full, OBJPROP_TEXT, text);
 }
@@ -1540,11 +1674,12 @@ void PanelButton(string name, int x, int y, string text, color bg)
 void HLine(string name, double price, color clr, ENUM_LINE_STYLE style, int width, string descr)
 {
    string full = PANEL_PREFIX + name;
-   if(price <= 0.0) { ObjectDelete(0, full); return; }
+   if(price <= 0.0) { ObjectDelete(0, full); ObjectDelete(0, full + "_T"); return; }
    if(ObjectFind(0, full) < 0)
    {
       ObjectCreate(0, full, OBJ_HLINE, 0, 0, price);
       ObjectSetInteger(0, full, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, full, OBJPROP_HIDDEN, true);
       ObjectSetInteger(0, full, OBJPROP_BACK, true);
    }
    ObjectSetDouble(0, full, OBJPROP_PRICE, price);
@@ -1553,6 +1688,23 @@ void HLine(string name, double price, color clr, ENUM_LINE_STYLE style, int widt
    ObjectSetInteger(0, full, OBJPROP_WIDTH, width);
    ObjectSetString(0, full, OBJPROP_TEXT, descr);
    ObjectSetString(0, full, OBJPROP_TOOLTIP, descr);
+   // etiqueta pegada encima de la línea, terminando en la vela actual (como en MALLA)
+   datetime t = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(t == 0) t = TimeCurrent();
+   string ft = full + "_T";
+   if(ObjectFind(0, ft) < 0)
+   {
+      ObjectCreate(0, ft, OBJ_TEXT, 0, t, price);
+      ObjectSetInteger(0, ft, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, ft, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, ft, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+      ObjectSetString(0, ft, OBJPROP_FONT, "Arial Bold");
+      ObjectSetInteger(0, ft, OBJPROP_FONTSIZE, 9);
+   }
+   ObjectSetInteger(0, ft, OBJPROP_TIME, 0, t);
+   ObjectSetDouble(0, ft, OBJPROP_PRICE, 0, price);
+   ObjectSetInteger(0, ft, OBJPROP_COLOR, clr);
+   ObjectSetString(0, ft, OBJPROP_TEXT, descr);
 }
 
 void VLine(string name, datetime t, color clr, string descr)
@@ -1564,19 +1716,89 @@ void VLine(string name, datetime t, color clr, string descr)
    ObjectSetInteger(0, full, OBJPROP_STYLE, STYLE_DOT);
    ObjectSetInteger(0, full, OBJPROP_WIDTH, 1);
    ObjectSetInteger(0, full, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, full, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, full, OBJPROP_BACK, true);
    ObjectSetString(0, full, OBJPROP_TEXT, descr);
    ObjectSetString(0, full, OBJPROP_TOOLTIP, descr);
 }
 
+void HLineDelete(string name)
+{
+   ObjectDelete(0, PANEL_PREFIX + name);
+   ObjectDelete(0, PANEL_PREFIX + name + "_T");
+}
+
 void LinesDelete()
 {
-   ObjectDelete(0, PANEL_PREFIX + "HL_Entry");
-   ObjectDelete(0, PANEL_PREFIX + "HL_Avg");
-   ObjectDelete(0, PANEL_PREFIX + "HL_Stop");
-   ObjectDelete(0, PANEL_PREFIX + "HL_Daily");
-   ObjectDelete(0, PANEL_PREFIX + "HL_Target");
-   ObjectDelete(0, PANEL_PREFIX + "HL_Next");
+   HLineDelete("HL_Entry"); HLineDelete("HL_Avg"); HLineDelete("HL_Stop");
+   HLineDelete("HL_Daily"); HLineDelete("HL_Target"); HLineDelete("HL_Next");
+}
+
+// Estilo del gráfico (como GW_EstiloGrafico de MALLA): solo colores, no toca nada más
+void ApplyChartStyle()
+{
+   ChartSetInteger(0, CHART_COLOR_BACKGROUND, GWB_FONDO_GRAFICO);
+   ChartSetInteger(0, CHART_COLOR_FOREGROUND, GWB_NEUTRO);
+   ChartSetInteger(0, CHART_SHOW_GRID, false);
+   ChartSetInteger(0, CHART_COLOR_GRID, GWB_FONDO_TITULO);
+   ChartSetInteger(0, CHART_COLOR_CHART_UP, GWB_ACENTO);
+   ChartSetInteger(0, CHART_COLOR_CHART_DOWN, GWB_ALERTA);
+   ChartSetInteger(0, CHART_COLOR_CANDLE_BULL, GWB_ACENTO);
+   ChartSetInteger(0, CHART_COLOR_CANDLE_BEAR, GWB_ALERTA);
+   ChartSetInteger(0, CHART_COLOR_CHART_LINE, GWB_ACENTO);
+   ChartSetInteger(0, CHART_COLOR_BID, GWB_NEUTRO);
+   ChartSetInteger(0, CHART_COLOR_ASK, GWB_AVISO);
+   ChartSetInteger(0, CHART_COLOR_VOLUME, GWB_ACENTO_TENUE);
+   ChartSetInteger(0, CHART_COLOR_STOP_LEVEL, GWB_ALERTA);
+   ChartSetInteger(0, CHART_SHOW_ONE_CLICK, false);
+   ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//|  Stop-out del BRÓKER (tomado de MALLA v0.8.2).                     |
+//|  Precio al que el bróker liquidaría con el capital de ESTE momento |
+//|  usando equity y margen de TODA la cuenta y TODAS las posiciones   |
+//|  del símbolo (al bróker no le importa el magic). Es distinto del   |
+//|  stop de equity de la cesta: este es el de verdad, el otro es el   |
+//|  nuestro. false = sin exposición neta en el símbolo.               |
+//+------------------------------------------------------------------+
+bool CalcBrokerStopOut(double &pSO, double &pP0, double &netLots, string &soTxt)
+{
+   pSO = 0.0; pP0 = 0.0; netLots = 0.0; soTxt = "";
+   double soValue = AccountInfoDouble(ACCOUNT_MARGIN_SO_SO);
+   bool   soMoney = ((ENUM_ACCOUNT_STOPOUT_MODE)AccountInfoInteger(ACCOUNT_MARGIN_SO_MODE) == ACCOUNT_STOPOUT_MODE_MONEY);
+   soTxt = (soMoney ? "equity " + DoubleToString(soValue, 2) : DoubleToString(soValue, 0) + "%");
+
+   double lb = 0.0, ls = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      double v = PositionGetDouble(POSITION_VOLUME);
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) lb += v; else ls += v;
+   }
+   netLots = lb - ls;
+   if(MathAbs(netLots) < 1e-8) return false;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(bid <= 0.0) return false;
+   double v1 = 0.0;   // valor de +1.0 de precio para 1 lote
+   if(!OrderCalcProfit(ORDER_TYPE_BUY, _Symbol, 1.0, bid, bid + 1.0, v1) || v1 <= 0.0)
+   {
+      double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      double tv = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      if(ts <= 0.0 || tv <= 0.0) return false;
+      v1 = tv / ts;
+   }
+   double perUnit = netLots * v1;
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double mg = AccountInfoDouble(ACCOUNT_MARGIN);
+   double cr = AccountInfoDouble(ACCOUNT_CREDIT);
+   double eqSO = soMoney ? soValue : soValue / 100.0 * mg;
+   pSO = bid - (eq - eqSO) / perUnit;
+   if(cr > 0.0) pP0 = bid - (eq - cr) / perUnit;
+   return true;
 }
 
 string FormatDuration(long seconds)
@@ -1635,26 +1857,179 @@ string LevelModeText()
    return "";
 }
 
+string ScreenName()
+{
+   string s = InpNombrePantalla;
+   StringTrimLeft(s); StringTrimRight(s);
+   if(s == "") s = "BASKET " + _Symbol;
+   return s;
+}
+
+void CornerLabel(string name, string txt, string font, int size, color clr, int ydist)
+{
+   string full = PANEL_PREFIX + name;
+   if(ObjectFind(0, full) < 0)
+   {
+      ObjectCreate(0, full, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, full, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
+      ObjectSetInteger(0, full, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+      ObjectSetInteger(0, full, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, full, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, full, OBJPROP_BACK, false);
+   }
+   ObjectSetInteger(0, full, OBJPROP_XDISTANCE, 14);
+   ObjectSetInteger(0, full, OBJPROP_YDISTANCE, ydist);
+   ObjectSetString(0, full, OBJPROP_FONT, font);
+   ObjectSetInteger(0, full, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, full, OBJPROP_COLOR, clr);
+   ObjectSetString(0, full, OBJPROP_TEXT, txt);
+}
+
+// Nombre grande abajo a la derecha: verde operando, rojo si detenida o pausada
+void DrawScreenName(bool halted)
+{
+   if(!InpNombreVer) { ObjectDelete(0, PANEL_PREFIX + "NOMBRE"); ObjectDelete(0, PANEL_PREFIX + "ESTADO"); return; }
+   bool stopped = halted || g_paused;
+   int tam = (InpNombreTam > 6 ? InpNombreTam : 28);
+   CornerLabel("NOMBRE", ScreenName(), "Segoe UI Black", tam, (stopped ? GWB_ALERTA : GWB_OK), 12);
+   if(stopped)
+   {
+      int tamE = tam / 3; if(tamE < 9) tamE = 9;
+      CornerLabel("ESTADO", (halted ? "DETENIDA - NO OPERA" : "PAUSADA - NO ABRE"), "Segoe UI Black", tamE, GWB_ALERTA, 12 + (int)MathRound(tam * 1.9));
+   }
+   else ObjectDelete(0, PANEL_PREFIX + "ESTADO");
+}
+
 void PanelCreate()
 {
-   g_lastPanelUpdate = 0;
+   g_lastPanelMs = 0;
    PanelUpdate();
 }
 
+//+------------------------------------------------------------------+
+//|  Renderizado: convierte las líneas acumuladas en objetos           |
+//+------------------------------------------------------------------+
+void PanelRender()
+{
+   int    tam  = (InpPanelTam >= 6 ? InpPanelTam : 10);
+   int    dpi  = (int)TerminalInfoInteger(TERMINAL_SCREEN_DPI);
+   double pxPt = (dpi > 0 ? dpi : 96) / 72.0;
+   int    alto = (int)MathCeil(tam * pxPt * 1.45);
+   int    medio = alto / 2;
+   int    x0   = 6;
+   int    y0   = (int)MathCeil(16 * pxPt);
+   int    pad  = (int)MathCeil(6 * pxPt);
+   int    hTit = alto + pad;
+   int    hPie = (int)MathCeil(tam * pxPt * 1.6);
+   int    hBtn = (int)MathCeil(tam * pxPt * 2.2);
+
+   // alto total y renglón más largo
+   int yFin = y0 + hTit + 2 + pad, maxLen = 1;
+   for(int i = 0; i < g_lnN; i++)
+   {
+      if(g_lnKind[i] == 0) { if(StringLen(g_lnTxt[i]) > maxLen) maxLen = StringLen(g_lnTxt[i]); continue; }
+      if(g_lnKind[i] == 4) { yFin += medio; continue; }
+      yFin += alto;
+      if(StringLen(g_lnTxt[i]) > maxLen) maxLen = StringLen(g_lnTxt[i]);
+   }
+   int ancho = (int)MathCeil(maxLen * tam * pxPt * 0.58) + 2 * pad + 8;
+   if(ancho < 380) ancho = 380;
+   int yBtn = yFin + pad / 2;
+   if(InpPanelManualButtons) yFin = yBtn + hBtn + pad / 2;
+   int altoT = yFin - y0 + hPie;
+
+   // fondo, franja de título, línea teal (se crean antes que los renglones para quedar debajo)
+   RectPanel("BG",  x0, y0, ancho, altoT, GWB_FONDO_PANEL);
+   RectPanel("TIT", x0, y0, ancho, hTit,  GWB_FONDO_TITULO);
+   RectPanel("LIN", x0, y0 + hTit, ancho, 2, GWB_ACENTO);
+   if(!g_pnlBgCreated) { RectPanel("BAR", x0, -100, ancho, alto, GWB_BARRA_ESTADO); g_pnlBgCreated = true; }
+
+   int  y = y0 + hTit + 2 + pad;
+   bool hasBar = false;
+   for(int i = 0; i < g_lnN; i++)
+   {
+      string nm = PANEL_PREFIX + StringFormat("R%02d", i);
+      string s  = (g_lnKind[i] == 4 ? " " : g_lnTxt[i]);
+      int    yy = (g_lnKind[i] == 0 ? y0 + (hTit - alto) / 2 + 1 : y);
+      if(i >= g_drawnN)
+      {
+         ObjectCreate(0, nm, OBJ_LABEL, 0, 0, 0);
+         ObjectSetInteger(0, nm, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+         ObjectSetInteger(0, nm, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+         ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, x0 + pad + 2);
+         ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+         ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, nm, OBJPROP_HIDDEN, true);
+         g_drawnTxt[i] = "#NADA#"; g_drawnY[i] = -1; g_drawnCol[i] = clrNONE;
+      }
+      if(g_drawnTxt[i] != s)
+      {
+         ObjectSetString(0, nm, OBJPROP_FONT, (g_lnKind[i] == 0 || g_lnKind[i] == 2) ? GWB_FUENTE_TITULO : InpPanelFuente);
+         ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, (g_lnKind[i] == 0 ? tam + 1 : (g_lnKind[i] == 1 && tam > 7 ? tam - 1 : tam)));
+         ObjectSetString(0, nm, OBJPROP_TEXT, s);
+         g_drawnTxt[i] = s;
+      }
+      if(g_drawnY[i] != yy)          { ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, yy); g_drawnY[i] = yy; }
+      if(g_drawnCol[i] != g_lnCol[i]){ ObjectSetInteger(0, nm, OBJPROP_COLOR, g_lnCol[i]); g_drawnCol[i] = g_lnCol[i]; }
+      if(g_lnKind[i] == 2 && !hasBar) { RectPanel("BAR", x0, y - 2, ancho, alto + 2, GWB_BARRA_ESTADO); hasBar = true; }
+      if(g_lnKind[i] != 0) y += (g_lnKind[i] == 4 ? medio : alto);
+   }
+   if(!hasBar) RectPanel("BAR", x0, -100, ancho, alto, GWB_BARRA_ESTADO);
+   for(int i = g_lnN; i < g_drawnN; i++) ObjectDelete(0, PANEL_PREFIX + StringFormat("R%02d", i));
+   g_drawnN = g_lnN;
+
+   // botones dentro del recuadro
+   if(InpPanelManualButtons)
+   {
+      int gap = pad / 2;
+      int wb  = (ancho - 2 * pad - 3 * gap) / 4;
+      int xb  = x0 + pad;
+      int fs  = (tam > 7 ? tam - 2 : tam);
+      PanelButton("BtnClose", xb, yBtn, wb, hBtn, "Cerrar cesta", C'140,40,40', fs);           xb += wb + gap;
+      PanelButton("BtnPause", xb, yBtn, wb, hBtn, (g_paused ? "Reanudar" : "Pausar"), (g_paused ? C'170,100,20' : C'70,76,88'), fs); xb += wb + gap;
+      PanelButton("BtnBuy",   xb, yBtn, wb, hBtn, "Ráfaga BUY",  C'30,110,80', fs);             xb += wb + gap;
+      PanelButton("BtnSell",  xb, yBtn, wb, hBtn, "Ráfaga SELL", C'150,60,60', fs);
+   }
+
+   // pie de página
+   string pie = PANEL_PREFIX + "PIE";
+   if(ObjectFind(0, pie) < 0)
+   {
+      ObjectCreate(0, pie, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, pie, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, pie, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+      ObjectSetInteger(0, pie, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, pie, OBJPROP_HIDDEN, true);
+      ObjectSetString(0, pie, OBJPROP_FONT, InpPanelFuente);
+      ObjectSetString(0, pie, OBJPROP_TEXT, "ScalpMetals Basket EA v1.00 - cesta con promediado y escalera");
+      ObjectSetInteger(0, pie, OBJPROP_COLOR, GWB_ACENTO_TENUE);
+   }
+   ObjectSetInteger(0, pie, OBJPROP_FONTSIZE, (tam > 7 ? tam - 2 : tam));
+   ObjectSetInteger(0, pie, OBJPROP_XDISTANCE, x0 + ancho - pad);
+   ObjectSetInteger(0, pie, OBJPROP_YDISTANCE, yFin + (hPie - alto) / 2);
+}
+
+//+------------------------------------------------------------------+
+//|  Contenido del panel                                               |
+//+------------------------------------------------------------------+
 void PanelUpdate()
 {
    if(!InpShowPanel) return;
-   if(TimeCurrent() == g_lastPanelUpdate) return;   // máximo una vez por segundo
-   g_lastPanelUpdate = TimeCurrent();
+   ulong nowMs = GetTickCount64();
+   if(g_lastPanelMs > 0 && nowMs - g_lastPanelMs < 500) return;   // máximo 2 veces por segundo
+   g_lastPanelMs = nowMs;
 
    // ---------- datos ----------
    BasketStats s;
    ComputeBasketStats(s);
    bool   open    = (g_state != ST_IDLE && s.count > 0);
+   bool   halted  = (GVGetOrInit(GVA("GlobalHalted"), 0.0) >= 1.0);
    double pvpl    = PointValuePerLot();
    double target  = open ? BasketTargetMoney(s) : 0.0;
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin  = AccountInfoDouble(ACCOUNT_MARGIN);
+   double ml      = (margin > 0.0) ? equity / margin * 100.0 : 0.0;
    double dayStart = GVGetOrInit(GVA("DayStartBalance"), balance);
    double peak     = GVGetOrInit(GVA("EquityPeak"), equity);
    double dayPL    = equity - dayStart;
@@ -1666,8 +2041,7 @@ void PanelUpdate()
    double px  = (g_basketDir > 0) ? bid : ask;
 
    double marginToStop = g_riskMoney + s.netPreTax;
-   double stopPrice = 0.0, targetPrice = 0.0, dailyPrice = 0.0;
-   double ptsStop = 0.0, ptsTarget = 0.0;
+   double stopPrice = 0.0, targetPrice = 0.0, dailyPrice = 0.0, ptsStop = 0.0, ptsTarget = 0.0;
    if(open && s.lots > 0.0 && pvpl > 0.0)
    {
       double perPoint = s.lots * pvpl;
@@ -1675,18 +2049,15 @@ void PanelUpdate()
       double targetPre = (InpTaxPercentOnProfit > 0.0) ? target / (1.0 - InpTaxPercentOnProfit / 100.0) : target;
       ptsTarget = (targetPre - s.netPreTax) / perPoint;
       double ptsDaily = (equity - (dayStart - dayLimitMoney)) / perPoint;
-      if(g_basketDir > 0)
-      {
-         stopPrice = px - ptsStop * _Point;  targetPrice = px + ptsTarget * _Point;  dailyPrice = px - ptsDaily * _Point;
-      }
-      else
-      {
-         stopPrice = px + ptsStop * _Point;  targetPrice = px - ptsTarget * _Point;  dailyPrice = px + ptsDaily * _Point;
-      }
+      if(g_basketDir > 0) { stopPrice = px - ptsStop * _Point; targetPrice = px + ptsTarget * _Point; dailyPrice = px - ptsDaily * _Point; }
+      else                { stopPrice = px + ptsStop * _Point; targetPrice = px - ptsTarget * _Point; dailyPrice = px + ptsDaily * _Point; }
    }
    double nextLvl = 0.0;
    bool hasNext = open && g_levelsUsed < InpMaxAveragingLevels && s.count < g_capacity
                   && GetLevel(g_basketDir, g_lastLevelPrice, nextLvl);
+
+   double pSO = 0.0, pP0 = 0.0, netLots = 0.0; string soTxt = "";
+   bool hasSO = CalcBrokerStopOut(pSO, pP0, netLots, soTxt);
 
    RefreshNews();
    double atrPts = GetATR() / _Point;
@@ -1694,118 +2065,145 @@ void PanelUpdate()
    double progress = (target > 0.0) ? s.net / target : 0.0;
    int    basketsToday = (int)GVGetOrInit(GVB("BasketsToday"), 0.0);
    double realizedToday = DailyRealizedEA();
+   bool   atOn = TradingPermitido();
 
-   color cSec = clrDeepSkyBlue, cDim = clrSilver, cOk = clrLime, cBad = clrOrangeRed, cWarn = clrKhaki;
+   // semáforo: consumo del stop de cesta, del límite diario y nivel de margen
+   double useStop  = (open && g_riskMoney > 0.0) ? (-s.netPreTax) / g_riskMoney : 0.0;
+   double useDaily = (dayLimitMoney > 0.0) ? (-dayPL) / dayLimitMoney : 0.0;
+   string luz = "VERDE  (normal)"; color cLuz = GWB_OK;
+   if(halted)                                                                 { luz = "DETENIDA"; cLuz = GWB_ALERTA; }
+   else if(useStop >= 0.75 || useDaily >= 0.75 || (margin > 0.0 && ml <= InpAlarma_ML)) { luz = "ROJO  (cerca del stop / vigilar)"; cLuz = GWB_ALERTA; }
+   else if(useStop >= 0.40 || useDaily >= 0.40 || (margin > 0.0 && ml <= InpAviso_ML))  { luz = "AMARILLO  (atento)"; cLuz = GWB_AVISO; }
 
-   // ---------- filas ----------
-   g_panelRow = 0;
-   int y = 20;
-   PanelRow(y, StringFormat("SCALPMETALS BASKET EA   %s   %s srv", _Symbol, TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)), clrGold, 18);
+   // ---------- líneas del panel ----------
+   g_lnN = 0;
+   L(StringFormat("SCALPMETALS BASKET  |  %s  |  %s  |  %s", _Symbol, ScreenName(), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)), 0);
+   L(StringFormat("Oro %s    spread %d pts    ATR %.0f pts", DoubleToString(bid, _Digits), (int)spread, atrPts), 3, GWB_ACENTO);
 
-   // CESTA
-   PanelRow(y, "CESTA", cSec);
-   string stateTxt;
-   if(g_state == ST_IDLE)         stateTxt = "SIN CESTA (esperando señal)";
-   else if(g_state == ST_CLOSING) stateTxt = "CERRANDO...";
-   else stateTxt = StringFormat("ABIERTA %s  #%I64d  hace %s", (g_basketDir > 0 ? "BUY" : "SELL"), g_basketId,
-                                FormatDuration((long)(TimeCurrent() - g_basketOpenTime)));
-   PanelRow(y, " Estado      " + stateTxt, (g_state == ST_IDLE ? cDim : clrWhite));
-   PanelRow(y, StringFormat(" Escalón     N=%d de %d   si gana -> %d   si pierde -> %d", g_ladderN, InpLadderMax,
-            MathMin(g_ladderN + InpLadderStep, InpLadderMax),
-            (InpLadderResetOnLoss ? InpLadderStart : MathMax(g_ladderN - InpLadderStep, InpLadderStart))));
-   PanelRow(y, StringFormat(" Posiciones  %d de %d   lotes %.2f   lote/pos %.2f", s.count, g_capacity, s.lots, g_lotPerPosition));
-   PanelRow(y, StringFormat(" Promediado  %d de %d niveles   método: %s", g_levelsUsed, InpMaxAveragingLevels, LevelModeText()));
-   PanelRow(y, " Próx. nivel " + (hasNext ? StringFormat("%.*f  (línea azul, a %.0f pts)", _Digits, nextLvl, MathAbs(px - nextLvl) / _Point) : "-"),
-            (hasNext ? clrDodgerBlue : cDim));
-   PanelRow(y, " Arranque    " + (open ? StringFormat("%.*f  %s  (línea amarilla)", _Digits, g_firstEntryPrice,
-            TimeToString(g_basketOpenTime, TIME_DATE | TIME_MINUTES)) : "-"), (open ? clrYellow : cDim));
-   PanelRow(y, " Precio medio" + (open ? StringFormat(" %.*f  (línea naranja)   precio actual %.*f", _Digits, s.avgPrice, _Digits, px) : " -"),
-            (open ? clrOrange : cDim));
+   if(halted)
+   {
+      L("### DETENIDA: " + (g_haltReason == "" ? "límite global de drawdown" : g_haltReason) + " ###", 3, GWB_ALERTA);
+      L("  No abre nada. Para reanudar: revisar la cuenta y recargar el EA.", 3, GWB_ALERTA);
+   }
+   if(!atOn) L("### AutoTrading APAGADO: no se envía ninguna orden ###", 3, GWB_ALERTA);
+   L("", 4);
 
-   // RESULTADO / TP
-   PanelRow(y, "RESULTADO Y OBJETIVO (TP)", cSec);
-   PanelRow(y, StringFormat(" Bruto %+.2f   swap %+.2f   comisión -%.2f   spread cierre -%.2f", s.gross, s.swap, s.commission, s.spreadCost));
-   PanelRow(y, StringFormat(" NETO  %+.2f   (modo: %s)", s.net, CloseModeText()), (s.net >= 0.0 ? cOk : cBad));
+   // CESTA (barra de estado)
+   if(g_state == ST_IDLE)         L("SIN CESTA - esperando señal", 2);
+   else if(g_state == ST_CLOSING) L("CERRANDO CESTA...", 2);
+   else L(StringFormat("CESTA ABIERTA %s  #%I64d  (%s)", (g_basketDir > 0 ? "BUY" : "SELL"), g_basketId,
+          FormatDuration((long)(TimeCurrent() - g_basketOpenTime))), 2);
+   L(StringFormat("  escalón N=%d de %d   si gana -> %d   si pierde -> %d", g_ladderN, InpLadderMax,
+     MathMin(g_ladderN + InpLadderStep, InpLadderMax), (InpLadderResetOnLoss ? InpLadderStart : MathMax(g_ladderN - InpLadderStep, InpLadderStart))));
+   L(StringFormat("  posiciones %d de %d   lotes %.2f   lote/pos %.2f", s.count, g_capacity, s.lots, g_lotPerPosition));
+   L(StringFormat("  promediado %d de %d niveles   método: %s", g_levelsUsed, InpMaxAveragingLevels, LevelModeText()));
+   if(open)
+   {
+      L(StringFormat("  arranque   %s  %s  (línea amarilla)", DoubleToString(g_firstEntryPrice, _Digits), TimeToString(g_basketOpenTime, TIME_DATE | TIME_MINUTES)), 3, InpLineEntryColor);
+      L(StringFormat("  precio medio %s  (línea naranja)   actual %s   excursión %.2f USD", DoubleToString(s.avgPrice, _Digits), DoubleToString(px, _Digits), MathAbs(px - s.avgPrice)), 3, InpLineAvgColor);
+      if(hasNext) L(StringFormat("  próx. nivel %s  (línea azul, a %.0f pts)", DoubleToString(nextLvl, _Digits), MathAbs(px - nextLvl) / _Point), 3, InpLineNextLevelColor);
+      else L("  próx. nivel -  (sin nivel de promediado disponible)", 3, GWB_NEUTRO);
+   }
+   L("", 4);
+
+   // RESULTADO Y OBJETIVO
+   L("RESULTADO Y OBJETIVO (TP)", 1);
+   L(StringFormat("  bruto %+.2f   swap %+.2f   comisión -%.2f   spread cierre -%.2f", s.gross, s.swap, s.commission, s.spreadCost));
+   L(StringFormat("  NETO  %+.2f   (cierre: %s)", s.net, CloseModeText()), 3, (s.net >= 0.0 ? GWB_OK : GWB_ALERTA));
    string tgtTxt;
-   if(InpTargetMode == TGT_PERCENT_BALANCE) tgtTxt = StringFormat("%.2f%% del balance de apertura", InpTargetPercent);
-   else if(InpTargetMode == TGT_FIXED_MONEY) tgtTxt = "cantidad fija";
-   else tgtTxt = StringFormat("%.0f pts desde el precio medio", InpTargetPoints);
-   PanelRow(y, StringFormat(" Meta cesta  %+.2f  (%s)   falta %.2f", target, tgtTxt, MathMax(0.0, target - s.net)));
-   PanelRow(y, " Precio meta " + (open ? StringFormat("~ %.*f  (línea verde, a %.0f pts)", _Digits, targetPrice, ptsTarget) : "-"), (open ? cOk : cDim));
-   PanelRow(y, StringFormat(" Progreso    [%s] %3.0f%%", ProgressBar(progress, 24), progress * 100.0), (progress >= 1.0 ? cOk : clrWhite));
+   if(InpTargetMode == TGT_PERCENT_BALANCE) tgtTxt = StringFormat("%.2f%% del balance", InpTargetPercent);
+   else if(InpTargetMode == TGT_FIXED_MONEY) tgtTxt = "fija";
+   else tgtTxt = StringFormat("%.0f pts desde el medio", InpTargetPoints);
+   L(StringFormat("  meta cesta +%.2f (%s)   faltan %.2f", target, tgtTxt, MathMax(0.0, target - s.net)));
+   if(open) L(StringFormat("  precio meta ~ %s  (línea verde, a %.0f pts)", DoubleToString(targetPrice, _Digits), ptsTarget), 3, InpLineTargetColor);
+   L(StringFormat("  progreso [%s] %3.0f%%", ProgressBar(progress, 24), progress * 100.0), 3, (progress >= 1.0 ? GWB_OK : GWB_TEXTO));
+   L("", 4);
 
-   // RIESGO / SL
-   PanelRow(y, "RIESGO Y STOP (SL)", cSec);
-   PanelRow(y, StringFormat(" Stop equity -%.2f  (%.2f%% del balance)   margen restante %.2f", g_riskMoney, EffectiveRiskPercent(), marginToStop),
-            (open && marginToStop < g_riskMoney * 0.3 ? cBad : clrWhite));
-   PanelRow(y, " Precio stop " + (open ? StringFormat("~ %.*f  (línea roja, a %.0f pts)", _Digits, stopPrice, ptsStop) : "-"), (open ? clrRed : cDim));
-   PanelRow(y, StringFormat(" Edad máx.   %s   edad actual %s", (InpMaxBasketAgeHours > 0 ? StringFormat("%dh (cierra con neto>=0)", InpMaxBasketAgeHours) : "sin límite"),
-            (open ? FormatDuration((long)(TimeCurrent() - s.oldest)) : "-")));
+   // RIESGO Y STOP
+   L("RIESGO Y STOP (SL)", 1);
+   L(StringFormat("  stop equity -%.2f (%.2f%% del balance)   margen restante %.2f", g_riskMoney, EffectiveRiskPercent(), marginToStop),
+     3, (open && useStop >= 0.75 ? GWB_ALERTA : GWB_TEXTO));
+   if(open) L(StringFormat("  precio stop ~ %s  (línea roja, a %.0f pts)", DoubleToString(stopPrice, _Digits), ptsStop), 3, InpLineStopColor);
+   L(StringFormat("  [%s] consumido %3.0f%%   edad %s / %s", ProgressBar(useStop, 24), useStop * 100.0,
+     (open ? FormatDuration((long)(TimeCurrent() - s.oldest)) : "-"), (InpMaxBasketAgeHours > 0 ? IntegerToString(InpMaxBasketAgeHours) + "h" : "sin límite")));
+   L("", 4);
 
-   // CUENTA / DD
-   PanelRow(y, "CUENTA Y DRAWDOWN (DD)", cSec);
-   PanelRow(y, StringFormat(" Balance %.2f   Equity %.2f   Pico %.2f", balance, equity, peak));
-   PanelRow(y, StringFormat(" Hoy         %+.2f (%+.2f%%)   límite diario -%.2f%% (-%.2f)%s", dayPL, dayPct, InpMaxDailyDrawdownPercent, dayLimitMoney,
-            (open ? StringFormat("   precio ~ %.*f", _Digits, dailyPrice) : "")), (dayPL >= 0.0 ? cOk : (dayPL < -dayLimitMoney * 0.6 ? cBad : cWarn)));
-   PanelRow(y, StringFormat(" Realizado   %+.2f hoy en %d cesta(s) cerradas por este EA", realizedToday, basketsToday), (realizedToday >= 0.0 ? cOk : cBad));
-   PanelRow(y, StringFormat(" DD global   %.2f%% desde el pico   límite %.2f%%", ddGlobal, InpMaxGlobalDrawdownPercent),
-            (ddGlobal > InpMaxGlobalDrawdownPercent * 0.6 ? cBad : clrWhite));
+   // MARGEN (toda la cuenta)
+   L("MARGEN Y STOP OUT DEL BRÓKER", 1);
+   L(StringFormat("  equity %.2f   margen %.2f   nivel %s   crédito %.2f", equity, margin,
+     (margin > 0.0 ? DoubleToString(ml, 0) + " %" : "s/posiciones"), AccountInfoDouble(ACCOUNT_CREDIT)),
+     3, (margin > 0.0 && ml <= InpAlarma_ML ? GWB_ALERTA : (margin > 0.0 && ml <= InpAviso_ML ? GWB_AVISO : GWB_TEXTO)));
+   L(StringFormat("  margin call %.0f%%   stop-out %s (bróker)", AccountInfoDouble(ACCOUNT_MARGIN_SO_CALL), soTxt), 3, GWB_NEUTRO);
+   if(hasSO && pSO > 0.0) L(StringFormat("  STOP OUT %s en %s  (a %+.2f USD)   neto %.2f lotes  (línea magenta)", soTxt, DoubleToString(pSO, _Digits), pSO - bid, netLots), 3, InpLineStopOutColor);
+   else L("  stop out: sin exposición neta en " + _Symbol, 3, GWB_NEUTRO);
+   if(hasSO && pP0 > 0.0) L(StringFormat("  CAPITAL PROPIO 0 (sin bono) en %s  (a %+.2f USD)", DoubleToString(pP0, _Digits), pP0 - bid), 3, clrDarkOrange);
+   L("", 4);
+
+   // CUENTA Y DD
+   L("CUENTA Y DRAWDOWN (DD)", 1);
+   L(StringFormat("  balance %.2f   equity %.2f   pico %.2f", balance, equity, peak));
+   L(StringFormat("  hoy %+.2f (%+.2f%%)   límite diario -%.2f%% (-%.2f)%s", dayPL, dayPct, InpMaxDailyDrawdownPercent, dayLimitMoney,
+     (open ? "   precio ~ " + DoubleToString(dailyPrice, _Digits) : "")), 3, (dayPL >= 0.0 ? GWB_OK : (useDaily >= 0.6 ? GWB_ALERTA : GWB_AVISO)));
+   L(StringFormat("  realizado hoy %+.2f en %d cesta(s) cerradas", realizedToday, basketsToday), 3, (realizedToday >= 0.0 ? GWB_OK : GWB_ALERTA));
+   L(StringFormat("  DD global %.2f%% desde el pico   límite %.2f%%", ddGlobal, InpMaxGlobalDrawdownPercent),
+     3, (ddGlobal > InpMaxGlobalDrawdownPercent * 0.6 ? GWB_ALERTA : GWB_TEXTO));
    string hist = "";
    for(int i = 0; i < g_histN; i++) hist += (g_hist[i] > 0.0 ? "G " : "P ");
-   PanelRow(y, " Últimas cestas (reciente->antigua): " + (g_histN > 0 ? hist : "ninguna"), cDim);
+   L("  últimas cestas (reciente -> antigua): " + (g_histN > 0 ? hist : "ninguna"), 3, GWB_NEUTRO);
+   L("", 4);
 
    // FILTROS
-   PanelRow(y, "FILTROS", cSec);
-   PanelRow(y, " Sesión      " + SessionText(), (IsWithinTradingSession(TimeCurrent()) ? cOk : cWarn));
-   PanelRow(y, StringFormat(" Spread      %d / %.0f pts     ATR %.0f pts [%.0f - %.0f]", (int)spread, InpMaxSpreadPoints, atrPts, InpATRMinPoints, InpATRMaxPoints),
-            ((spread <= (long)InpMaxSpreadPoints && atrPts >= InpATRMinPoints && atrPts <= InpATRMaxPoints) ? clrWhite : cWarn));
+   L("FILTROS", 1);
+   L("  sesión    " + SessionText(), 3, (IsWithinTradingSession(TimeCurrent()) ? GWB_OK : GWB_AVISO));
+   L(StringFormat("  spread    %d / %.0f pts     ATR %.0f pts [%.0f - %.0f]", (int)spread, InpMaxSpreadPoints, atrPts, InpATRMinPoints, InpATRMaxPoints),
+     3, ((spread <= (long)InpMaxSpreadPoints && atrPts >= InpATRMinPoints && atrPts <= InpATRMaxPoints) ? GWB_TEXTO : GWB_AVISO));
    string newsTxt;
    if(InpNewsMode == NEWS_IGNORE) newsTxt = "filtro desactivado";
-   else if(g_newsBlackout) newsTxt = "BLOQUEO ACTIVO (±" + IntegerToString(InpNewsMinutesBefore) + "/" + IntegerToString(InpNewsMinutesAfter) + " min)";
+   else if(g_newsBlackout) newsTxt = "BLOQUEO ACTIVO (-" + IntegerToString(InpNewsMinutesBefore) + "/+" + IntegerToString(InpNewsMinutesAfter) + " min)";
    else if(g_newsNextTime > 0) newsTxt = StringFormat("próxima %s %s (en %s)%s", TimeToString(g_newsNextTime, TIME_MINUTES), g_newsNextName,
-                                                      FormatDuration((long)(g_newsNextTime - TimeCurrent())),
-                                                      (InpNewsMode == NEWS_CLOSE_IF_POSITIVE ? "  cierra si neto>=0" : ""));
+                                         FormatDuration((long)(g_newsNextTime - TimeCurrent())), (InpNewsMode == NEWS_CLOSE_IF_POSITIVE ? "  cierra si neto>=0" : ""));
    else newsTxt = "sin noticias de alto impacto en 24h (o sin calendario)";
-   PanelRow(y, " Noticias " + InpNewsCurrency + " " + newsTxt, (g_newsBlackout ? cBad : clrWhite));
+   L("  noticias " + InpNewsCurrency + " " + newsTxt, 3, (g_newsBlackout ? GWB_ALERTA : GWB_TEXTO));
    string wedTxt;
    if(InpWednesdayMode == WED_IGNORE) wedTxt = "sin tratamiento";
    else if(InpWednesdayMode == WED_NO_NEW_BASKETS) wedTxt = StringFormat("sin cestas nuevas desde %02d:00", InpWednesdayCutoffHour);
    else wedTxt = StringFormat("desde %02d:00 sin cestas nuevas y cierre si neto>=0", InpWednesdayCutoffHour);
-   PanelRow(y, StringFormat(" Swap triple día %d: %s", InpSwapTripleDay, wedTxt), (IsWednesdayBlocked(TimeCurrent()) ? cWarn : clrWhite));
-   PanelRow(y, StringFormat(" Rollover    %02d-%02dh %s   viernes corte %02d:00 %s", InpRolloverStartHour, InpRolloverEndHour,
-            (InpAvoidRollover ? "activo" : "off"), InpFridayCutoffHour, (InpAvoidFridayClose ? "activo" : "off")), cDim);
+   L(StringFormat("  swap triple (día %d): %s", InpSwapTripleDay, wedTxt), 3, (IsWednesdayBlocked(TimeCurrent()) ? GWB_AVISO : GWB_TEXTO));
+   L(StringFormat("  rollover %02d-%02dh %s   viernes corte %02d:00 %s", InpRolloverStartHour, InpRolloverEndHour,
+     (InpAvoidRollover ? "activo" : "off"), InpFridayCutoffHour, (InpAvoidFridayClose ? "activo" : "off")), 3, GWB_NEUTRO);
+   L("", 4);
 
-   // BLOQUEO
-   PanelRow(y, "BLOQUEO ACTUAL: " + (g_blockReason == "" ? "ninguno" : g_blockReason) + (g_paused ? "   [PAUSADO]" : ""),
-            (g_blockReason == "" && !g_paused ? cOk : cWarn), 20);
+   L("SEMÁFORO: " + luz, 3, cLuz);
+   L("BLOQUEO: " + (g_blockReason == "" ? "ninguno" : g_blockReason) + (g_paused ? "   [PAUSADO]" : ""), 3, (g_blockReason == "" && !g_paused ? GWB_OK : GWB_AVISO));
+   L("AutoTrading: " + (atOn ? "ENCENDIDO" : "APAGADO") + "   Push: " + (InpPush ? "ON" : "OFF"), 3, (atOn ? GWB_OK : GWB_ALERTA));
 
-   // botones
-   if(InpPanelManualButtons)
-   {
-      PanelButton("BtnClose", 14,  y, "Cerrar cesta", clrFireBrick);
-      PanelButton("BtnPause", 138, y, (g_paused ? "Reanudar" : "Pausar"), (g_paused ? clrDarkOrange : clrDimGray));
-      PanelButton("BtnBuy",   262, y, "Ráfaga BUY",  clrSeaGreen);
-      PanelButton("BtnSell",  386, y, "Ráfaga SELL", clrIndianRed);
-      y += 30;
-   }
-   PanelBackground(y - 10);
+   PanelRender();
+   DrawScreenName(halted);
 
    // ---------- líneas en el gráfico ----------
    if(InpDrawLines)
    {
       if(open)
       {
-         HLine("HL_Entry",  g_firstEntryPrice, InpLineEntryColor, STYLE_SOLID, 2, StringFormat("Arranque cesta #%I64d", g_basketId));
+         HLine("HL_Entry",  g_firstEntryPrice, InpLineEntryColor,  STYLE_SOLID,   2, StringFormat("ARRANQUE cesta #%I64d  %s", g_basketId, DoubleToString(g_firstEntryPrice, _Digits)));
          VLine(StringFormat("VLS_%I64d", g_basketId), g_basketOpenTime, InpLineEntryColor, StringFormat("Arranque cesta #%I64d", g_basketId));
-         HLine("HL_Avg",    s.avgPrice,  InpLineAvgColor,   STYLE_DOT,     1, "Precio medio de la cesta");
-         HLine("HL_Stop",   stopPrice,   InpLineStopColor,  STYLE_SOLID,   2, StringFormat("Stop de equity ~ (-%.2f)", g_riskMoney));
-         HLine("HL_Daily",  dailyPrice,  InpLineStopColor,  STYLE_DASH,    1, StringFormat("Límite de pérdida diaria ~ (-%.2f)", dayLimitMoney));
-         HLine("HL_Target", targetPrice, InpLineTargetColor, STYLE_DASH,   1, StringFormat("Objetivo neto ~ (+%.2f)", target));
-         if(hasNext) HLine("HL_Next", nextLvl, InpLineNextLevelColor, STYLE_DASHDOT, 1, "Próximo nivel de promediado");
-         else ObjectDelete(0, PANEL_PREFIX + "HL_Next");
+         HLine("HL_Avg",    s.avgPrice,  InpLineAvgColor,    STYLE_DOT,     1, "PRECIO MEDIO " + DoubleToString(s.avgPrice, _Digits));
+         HLine("HL_Stop",   stopPrice,   InpLineStopColor,   STYLE_SOLID,   2, StringFormat("STOP EQUITY -%.2f  ~%s", g_riskMoney, DoubleToString(stopPrice, _Digits)));
+         HLine("HL_Daily",  dailyPrice,  InpLineStopColor,   STYLE_DASH,    1, StringFormat("LÍMITE DIARIO -%.2f  ~%s", dayLimitMoney, DoubleToString(dailyPrice, _Digits)));
+         HLine("HL_Target", targetPrice, InpLineTargetColor, STYLE_DASH,    1, StringFormat("META +%.2f  ~%s", target, DoubleToString(targetPrice, _Digits)));
+         if(hasNext) HLine("HL_Next", nextLvl, InpLineNextLevelColor, STYLE_DASHDOT, 1, "PRÓX. PROMEDIADO " + DoubleToString(nextLvl, _Digits));
+         else HLineDelete("HL_Next");
       }
       else
          LinesDelete();
+
+      // stop-out del bróker: con cualquier exposición en el símbolo (nuestra o manual)
+      if(InpSO_Linea && hasSO && pSO > 0.0)
+         HLine("HL_SO", pSO, InpLineStopOutColor, STYLE_SOLID, 2, StringFormat("STOP OUT BRÓKER %s  %s  (a %+.2f)", soTxt, DoubleToString(pSO, _Digits), pSO - bid));
+      else HLineDelete("HL_SO");
+      if(InpSO_Linea && hasSO && pP0 > 0.0)
+         HLine("HL_P0", pP0, clrDarkOrange, STYLE_DASH, 1, StringFormat("CAPITAL PROPIO 0 (sin bono)  %s", DoubleToString(pP0, _Digits)));
+      else HLineDelete("HL_P0");
    }
    ChartRedraw();
 }
@@ -1815,8 +2213,15 @@ void PanelDelete()
    ObjectsDeleteAll(0, PANEL_PREFIX + "R");
    ObjectsDeleteAll(0, PANEL_PREFIX + "Btn");
    ObjectsDeleteAll(0, PANEL_PREFIX + "BG");
-   LinesDelete();
-   // las líneas verticales VLS_<id> se conservan como historial de arranques de cesta
+   ObjectsDeleteAll(0, PANEL_PREFIX + "TIT");
+   ObjectsDeleteAll(0, PANEL_PREFIX + "LIN");
+   ObjectsDeleteAll(0, PANEL_PREFIX + "BAR");
+   ObjectsDeleteAll(0, PANEL_PREFIX + "PIE");
+   ObjectsDeleteAll(0, PANEL_PREFIX + "NOMBRE");
+   ObjectsDeleteAll(0, PANEL_PREFIX + "ESTADO");
+   ObjectsDeleteAll(0, PANEL_PREFIX + "HL_");
+   g_drawnN = 0; g_pnlBgCreated = false;
+   // las líneas verticales VLS_<id> se conservan como historial de arranques
    ChartRedraw();
 }
 
