@@ -193,11 +193,11 @@ input int    InpMaxOrderRetries      = 3;     // Reintentos ante requote
 
 input group "=== FILTRO DE HORARIO (hora del servidor) ==="
 input bool   InpUseSessionFilter     = true;  // Activar ventanas horarias
-input int    InpSession1StartHour    = 8;     // Inicio ventana 1
-input int    InpSession1EndHour      = 11;    // Fin ventana 1
-input bool   InpUseSession2          = true;  // Activar ventana 2
-input int    InpSession2StartHour    = 13;    // Inicio ventana 2
-input int    InpSession2EndHour      = 16;    // Fin ventana 2
+input int    InpSession1StartHour    = 7;     // Inicio ventana 1 (pre-apertura de Londres, hora servidor)
+input int    InpSession1EndHour      = 21;    // Fin ventana 1 (cierre de Nueva York, hora servidor)
+input bool   InpUseSession2          = false; // Activar ventana 2 (apagada: la ventana 1 ya cubre Londres + Nueva York)
+input int    InpSession2StartHour    = 13;    // Inicio ventana 2 (solo si se activa)
+input int    InpSession2EndHour      = 16;    // Fin ventana 2 (solo si se activa)
 
 input group "=== FILTRO DE ROLLOVER Y BORDES DE SEMANA ==="
 input bool   InpAvoidRollover        = true;  // Evitar rollover diario
