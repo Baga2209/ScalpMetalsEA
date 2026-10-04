@@ -192,7 +192,7 @@ input double InpSlippageUSD          = 0.30;  // Desviación máxima por orden (
 input int    InpMaxOrderRetries      = 3;     // Reintentos ante requote
 
 input group "=== FILTRO DE HORARIO (hora del servidor) ==="
-input bool   InpUseSessionFilter     = true;  // Activar ventanas horarias
+input bool   InpUseSessionFilter     = false; // Activar ventanas horarias (false = opera las 24 h; rollover y bordes de semana siguen activos)
 input int    InpSession1StartHour    = 7;     // Inicio ventana 1 (pre-apertura de Londres, hora servidor)
 input int    InpSession1EndHour      = 21;    // Fin ventana 1 (cierre de Nueva York, hora servidor)
 input bool   InpUseSession2          = false; // Activar ventana 2 (apagada: la ventana 1 ya cubre Londres + Nueva York)
