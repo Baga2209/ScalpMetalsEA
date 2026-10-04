@@ -1,6 +1,8 @@
 # Especificación: RAFAGA EA (XAUUSDc)
 
-Versión 0.1 · 2026-10-03 · Estado: implementada en `RAFAGA_EA.mq5` (pendiente de compilar y backtest)
+Versión 0.2 · 2026-10-04 · Estado: implementada en `RAFAGA_EA.mq5`, en pruebas
+
+**Ajuste de la prueba del 2026-10-04 (decisión del usuario):** solo ventas, ráfaga de 10 entradas inmediatas sin pausa entre órdenes, señal por rebote en resistencia (toque de nivel M5 + vela de rechazo M1). Los valores por defecto del EA reflejan esta prueba; la escalera 2→10 sigue disponible poniendo `InpLadderStart=2`.
 
 Este documento define la estrategia completa antes de escribir una línea de MQL5.
 Cada regla está numerada (R-xx) y cada parámetro configurable tiene nombre de

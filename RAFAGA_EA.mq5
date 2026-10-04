@@ -116,25 +116,25 @@ input long   InpMagicNumber        = 202610030;  // Número mágico (distinto de
 input string InpTradeComment       = "RAFAGA";    // Prefijo del comentario de las órdenes
 
 input group "=== DIRECCIÓN ==="
-input ENUM_DIRECTION_MODE InpDirectionMode = DIR_BOTH_BY_SIGNAL; // Dirección permitida
+input ENUM_DIRECTION_MODE InpDirectionMode = DIR_SELL_ONLY;      // Dirección permitida (prueba: solo ventas)
 
 input group "=== SEÑAL DE ENTRADA (dispara la ráfaga inicial) ==="
-input ENUM_SIGNAL_MODE InpSignalMode = SIG_BB_RSI;   // Tipo de señal
-input ENUM_TIMEFRAMES  InpAnalysisTF = PERIOD_M5;    // Timeframe de la señal
+input ENUM_SIGNAL_MODE InpSignalMode = SIG_SUPPORT_TOUCH; // Tipo de señal (rebote en resistencia = toque + vela de rechazo)
+input ENUM_TIMEFRAMES  InpAnalysisTF = PERIOD_M1;    // Timeframe de la señal (M1 = reacción rápida)
 input int    InpBBPeriod             = 20;           // Periodo Bollinger
 input double InpBBDeviation          = 2.0;          // Desviación Bollinger
 input int    InpRSIPeriod            = 14;           // Periodo RSI
 input double InpRSIOversold          = 30.0;         // RSI sobreventa (compra)
 input double InpRSIOverbought        = 70.0;         // RSI sobrecompra (venta)
-input bool   InpRequireRejectionCandle = true;       // Exigir vela de rechazo en la señal
+input bool   InpRequireRejectionCandle = true;       // Exigir vela de rechazo (el "rebote") antes de disparar la ráfaga
 
 input group "=== RÁFAGA Y ESCALERA ==="
-input int    InpLadderStart          = 2;     // Tamaño de ráfaga inicial
+input int    InpLadderStart          = 10;    // Tamaño de ráfaga inicial (prueba: 10 de golpe; 2 para activar la escalera)
 input int    InpLadderStep           = 2;     // Incremento por cesta ganadora
 input int    InpLadderMax            = 10;    // Techo de la escalera
 input bool   InpLadderResetOnLoss    = true;  // Perdedora: volver al inicio (false = bajar un escalón)
 input bool   InpLadderResetOnDay     = false; // Reiniciar la escalera cada día
-input int    InpBurstDelayMs         = 400;   // Milisegundos entre órdenes de la ráfaga
+input int    InpBurstDelayMs         = 0;     // Milisegundos entre órdenes de la ráfaga (0 = una tras otra sin pausa)
 input double InpBurstMaxSpreadUSD    = 0.45;  // Spread máximo durante la ráfaga (USD de precio)
 input double InpBurstMaxSlippageUSD  = 0.30;  // Distancia máxima entre primer y último fill (USD de precio)
 
@@ -147,7 +147,7 @@ input bool   InpAveragingRequireRejection = true; // Exigir vela de rechazo ante
 
 input group "=== DETECCIÓN DE SOPORTE / RESISTENCIA ==="
 input ENUM_LEVEL_MODE InpLevelMode   = LVL_SWING;   // Método de detección de niveles
-input ENUM_TIMEFRAMES InpLevelTF     = PERIOD_M15;  // Timeframe de los niveles
+input ENUM_TIMEFRAMES InpLevelTF     = PERIOD_M5;   // Timeframe de los niveles (resistencias de M5 para señal en M1)
 input int    InpSwingLookback        = 20;    // LVL_SWING: velas hacia atrás
 input int    InpFractalMinAgeBars    = 3;     // LVL_FRACTAL: edad mínima del fractal (velas)
 input int    InpPivotLevelsToUse     = 3;     // LVL_PIVOT_DAILY: usar S1..Sn / R1..Rn (1-3)
@@ -186,8 +186,8 @@ input int    InpSwapTripleDay        = 3;     // Día de swap triple (0=Dom, 1=L
 input group "=== FILTROS DE EJECUCIÓN ==="
 input double InpMaxSpreadUSD         = 0.45;  // Spread máximo para abrir ráfagas (USD de precio)
 input int    InpATRPeriod            = 14;    // Periodo ATR
-input double InpATRMinUSD            = 1.0;   // ATR mínimo de la vela M5 (USD de precio): evita mercado muerto
-input double InpATRMaxUSD            = 12.0;  // ATR máximo de la vela M5 (USD de precio): evita picos anómalos
+input double InpATRMinUSD            = 0.40;  // ATR mínimo de la vela del TF de señal (USD de precio): evita mercado muerto
+input double InpATRMaxUSD            = 6.0;   // ATR máximo de la vela del TF de señal (USD de precio): evita picos anómalos
 input double InpSlippageUSD          = 0.30;  // Desviación máxima por orden (USD de precio)
 input int    InpMaxOrderRetries      = 3;     // Reintentos ante requote
 
@@ -2086,7 +2086,7 @@ void PanelUpdate()
    // ---------- líneas del panel ----------
    g_lnN = 0;
    L(StringFormat("RAFAGA  |  %s  |  %s  |  %s", _Symbol, ScreenName(), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)), 0);
-   L(StringFormat("Oro %s    spread %.2f USD    ATR M5 %.2f USD    punto=%s", DoubleToString(bid, _Digits), PointsToUsd((double)spread), PointsToUsd(atrPts), DoubleToString(_Point, _Digits)), 3, GWB_ACENTO);
+   L(StringFormat("Oro %s    spread %.2f USD    ATR %.2f USD    punto=%s", DoubleToString(bid, _Digits), PointsToUsd((double)spread), PointsToUsd(atrPts), DoubleToString(_Point, _Digits)), 3, GWB_ACENTO);
 
    if(halted)
    {
@@ -2163,7 +2163,7 @@ void PanelUpdate()
    // FILTROS
    L("FILTROS", 1);
    L("  sesión    " + SessionText(), 3, (IsWithinTradingSession(TimeCurrent()) ? GWB_OK : GWB_AVISO));
-   L(StringFormat("  spread    %.2f / %.2f USD     ATR M5 %.2f USD [%.2f - %.2f]", PointsToUsd((double)spread), InpMaxSpreadUSD, PointsToUsd(atrPts), InpATRMinUSD, InpATRMaxUSD),
+   L(StringFormat("  spread    %.2f / %.2f USD     ATR %.2f USD [%.2f - %.2f]", PointsToUsd((double)spread), InpMaxSpreadUSD, PointsToUsd(atrPts), InpATRMinUSD, InpATRMaxUSD),
      3, (((double)spread <= UsdToPoints(InpMaxSpreadUSD) && atrPts >= UsdToPoints(InpATRMinUSD) && atrPts <= UsdToPoints(InpATRMaxUSD)) ? GWB_TEXTO : GWB_AVISO));
    string newsTxt;
    if(InpNewsMode == NEWS_IGNORE) newsTxt = "filtro desactivado";
