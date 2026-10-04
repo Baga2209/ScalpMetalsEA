@@ -86,8 +86,8 @@ convención `Inp...` del EA actual.
 | `InpLadderResetOnLoss` | true | Cesta perdedora vuelve a `InpLadderStart`. Si false, baja un escalón. |
 | `InpLadderResetOnDay` | false | Si true, cada día empieza en `InpLadderStart`. |
 | `InpBurstDelayMs` | 400 | Milisegundos entre órdenes de la ráfaga. Simula la pulsación manual y evita que el bróker rechace por ráfaga. |
-| `InpBurstMaxSpreadPoints` | 200 | Si el spread sube por encima durante la ráfaga, se detiene la ráfaga y la cesta queda con las posiciones ya abiertas. |
-| `InpBurstMaxSlippagePoints` | 30 | Si una orden de la ráfaga se llena a más de esta distancia de la primera, se detiene la ráfaga. |
+| `InpBurstMaxSpreadUSD` | 0.45 | En USD de precio. Si el spread sube por encima durante la ráfaga, se detiene la ráfaga y la cesta queda con las posiciones ya abiertas. |
+| `InpBurstMaxSlippageUSD` | 0.30 | En USD de precio. Si una orden de la ráfaga se llena a más de esta distancia de la primera, se detiene la ráfaga. |
 
 ### 3.5 Promediado (entradas adicionales en contra)
 
@@ -121,11 +121,11 @@ Cómo se usan según la dirección:
 | Input | Defecto | Notas |
 |---|---|---|
 | `InpCloseMode` | `CLOSE_BASKET_NET` | `CLOSE_BASKET_NET`: cierra todo cuando el neto total ≥ objetivo. `CLOSE_PER_POSITION`: cada posición cierra sola al alcanzar su neto; las perdedoras esperan. `CLOSE_HYBRID`: cierra ganadoras individualmente Y cierra el resto cuando su neto conjunto ≥ objetivo. |
-| `InpTargetMode` | `TGT_PERCENT_BALANCE` | `TGT_PERCENT_BALANCE`, `TGT_FIXED_MONEY`, `TGT_POINTS_FROM_AVG`. |
+| `InpTargetMode` | `TGT_PERCENT_BALANCE` | `TGT_PERCENT_BALANCE`, `TGT_FIXED_MONEY`, `TGT_USD_FROM_AVG`. |
 | `InpTargetPercent` | 0.4 | % del balance como utilidad neta objetivo de la cesta. |
 | `InpTargetMoney` | 10.0 | Moneda de la cuenta. Solo `TGT_FIXED_MONEY`. |
-| `InpTargetPoints` | 150 | Puntos desde el precio medio. Solo `TGT_POINTS_FROM_AVG`. |
-| `InpPerPositionTargetPoints` | 80 | Solo `CLOSE_PER_POSITION` y `CLOSE_HYBRID`. Objetivo neto de cada posición en puntos. |
+| `InpTargetUSDFromAvg` | 1.5 | USD de precio desde el precio medio. Solo `TGT_USD_FROM_AVG`. |
+| `InpPerPositionTargetUSD` | 0.80 | Solo `CLOSE_PER_POSITION` y `CLOSE_HYBRID`. Objetivo neto de cada posición en USD de precio. |
 | `InpMaxBasketAgeHours` | 48 | Pasado este tiempo, la cesta se cierra en cuanto el neto sea ≥ 0, aunque no llegue al objetivo. 0 desactiva. |
 
 ### 3.8 Costes (para que el objetivo sea neto de verdad)
@@ -159,8 +159,18 @@ Cómo se usan según la dirección:
 
 ### 3.11 Filtros heredados del EA actual
 
-Sesiones horarias, spread máximo, ATR mínimo/máximo, rollover diario y bordes de
-semana se mantienen tal cual, con los mismos inputs. Bloquean **ráfagas nuevas**
+Sesiones horarias, rollover diario y bordes de semana se mantienen tal cual.
+Spread máximo, ATR mínimo/máximo y desviación pasan a **USD de precio** porque el
+valor del punto depende de los decimales del símbolo (XAUUSD a 2 decimales = 0.01,
+XAUUSDm/XAUUSDc de Exness a 3 decimales = 0.001). El backtest del 2026-10-03 lo
+demostró: con los filtros en puntos el EA solo pudo operar 19 cestas en siete años.
+
+| Input | Defecto | Notas |
+|---|---|---|
+| `InpMaxSpreadUSD` | 0.45 | Spread máximo para abrir ráfagas. Exness Standard en oro ronda 0.20-0.35. |
+| `InpATRMinUSD` | 1.0 | ATR de la vela M5 mínimo. Por debajo el mercado está muerto. |
+| `InpATRMaxUSD` | 12.0 | ATR de la vela M5 máximo. Por encima es un pico de noticia o apertura. |
+| `InpSlippageUSD` | 0.30 | Desviación máxima aceptada por orden. | Bloquean **ráfagas nuevas**
 (inicial y promediado), nunca el cierre de una cesta ya abierta.
 
 El filtro de noticias cambia a un modo con tres opciones:
@@ -285,12 +295,12 @@ neto          = neto_pre_tax × (1 − InpTaxPercentOnProfit/100)   si neto_pre_
 
 Al cerrar la cesta, el EA lee las comisiones reales de los deals del historial y registra la diferencia entre estimado y real para calibrar `InpCommissionPerLotRoundTrip`.
 
-**R-08 Objetivo.** Según `InpTargetMode`: `balance_apertura × InpTargetPercent/100`, o `InpTargetMoney`, o la ganancia que resulta de `InpTargetPoints` desde el precio medio con los lotes actuales.
+**R-08 Objetivo.** Según `InpTargetMode`: `balance_apertura × InpTargetPercent/100`, o `InpTargetMoney`, o la ganancia que resulta de `InpTargetUSDFromAvg` desde el precio medio con los lotes actuales.
 
 **R-09 Cierre por objetivo.**
 
 - `CLOSE_BASKET_NET`: cuando `neto ≥ objetivo`, cierra todas las posiciones de la cesta, de la más antigua a la más nueva.
-- `CLOSE_PER_POSITION`: cada posición cierra sola cuando su neto individual ≥ `InpPerPositionTargetPoints × lote × valor_punto`. La cesta termina cuando no queda ninguna. Las perdedoras esperan al promediado.
+- `CLOSE_PER_POSITION`: cada posición cierra sola cuando su neto individual ≥ `InpPerPositionTargetUSD` convertido a puntos `× lote × valor_punto`. La cesta termina cuando no queda ninguna. Las perdedoras esperan al promediado.
 - `CLOSE_HYBRID`: aplica lo anterior y, además, si el neto de las que quedan ≥ objetivo de cesta, las cierra todas.
 
 **R-10 Stop de equity.** En todo momento y en todo modo de cierre: si `neto ≤ −riesgo_dinero`, cierra toda la cesta de inmediato. Es la única salida que ignora los filtros de spread y sesión. Se evalúa en cada tick, no en cada vela.

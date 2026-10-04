@@ -63,7 +63,7 @@ enum ENUM_TARGET_MODE
 {
    TGT_PERCENT_BALANCE = 0, // % del balance de apertura de la cesta
    TGT_FIXED_MONEY     = 1, // Cantidad fija en moneda de la cuenta
-   TGT_POINTS_FROM_AVG = 2  // Puntos desde el precio medio de la cesta
+   TGT_USD_FROM_AVG    = 2  // USD de precio desde el precio medio de la cesta
 };
 
 enum ENUM_WEDNESDAY_MODE
@@ -135,8 +135,8 @@ input int    InpLadderMax            = 10;    // Techo de la escalera
 input bool   InpLadderResetOnLoss    = true;  // Perdedora: volver al inicio (false = bajar un escalón)
 input bool   InpLadderResetOnDay     = false; // Reiniciar la escalera cada día
 input int    InpBurstDelayMs         = 400;   // Milisegundos entre órdenes de la ráfaga
-input double InpBurstMaxSpreadPoints = 200;   // Spread máximo durante la ráfaga (puntos)
-input double InpBurstMaxSlippagePoints = 30;  // Distancia máxima entre primer y último fill (puntos)
+input double InpBurstMaxSpreadUSD    = 0.45;  // Spread máximo durante la ráfaga (USD de precio)
+input double InpBurstMaxSlippageUSD  = 0.30;  // Distancia máxima entre primer y último fill (USD de precio)
 
 input group "=== PROMEDIADO (entradas adicionales en contra) ==="
 input int    InpMaxAveragingLevels     = 2;     // Ráfagas adicionales permitidas (0 = sin promediado)
@@ -159,8 +159,8 @@ input ENUM_CLOSE_MODE  InpCloseMode  = CLOSE_BASKET_NET;     // Modo de cierre
 input ENUM_TARGET_MODE InpTargetMode = TGT_PERCENT_BALANCE;  // Cómo se define el objetivo
 input double InpTargetPercent        = 0.4;   // Objetivo neto como % del balance
 input double InpTargetMoney          = 10.0;  // Objetivo neto fijo (moneda de la cuenta)
-input double InpTargetPoints         = 150;   // Objetivo en puntos desde el precio medio
-input double InpPerPositionTargetPoints = 80; // Objetivo neto por posición (modos PER_POSITION / HYBRID)
+input double InpTargetUSDFromAvg     = 1.5;   // Objetivo en USD de precio desde el precio medio (TGT_USD_FROM_AVG)
+input double InpPerPositionTargetUSD = 0.80;  // Objetivo neto por posición en USD de precio (PER_POSITION / HYBRID)
 input int    InpMaxBasketAgeHours    = 48;    // Edad máxima: cerrar con neto >= 0 (0 = sin límite)
 
 input group "=== COSTES (para que el objetivo sea neto) ==="
@@ -184,11 +184,11 @@ input int    InpWednesdayCutoffHour  = 20;    // Hora de corte (servidor)
 input int    InpSwapTripleDay        = 3;     // Día de swap triple (0=Dom, 1=Lun, 2=Mar, 3=Mié ... 6=Sáb)
 
 input group "=== FILTROS DE EJECUCIÓN ==="
-input double InpMaxSpreadPoints      = 200;   // Spread máximo para abrir ráfagas (puntos)
+input double InpMaxSpreadUSD         = 0.45;  // Spread máximo para abrir ráfagas (USD de precio)
 input int    InpATRPeriod            = 14;    // Periodo ATR
-input double InpATRMinPoints         = 50;    // ATR mínimo (puntos)
-input double InpATRMaxPoints         = 900;   // ATR máximo (puntos)
-input int    InpSlippagePoints       = 20;    // Desviación máxima por orden
+input double InpATRMinUSD            = 1.0;   // ATR mínimo de la vela M5 (USD de precio): evita mercado muerto
+input double InpATRMaxUSD            = 12.0;  // ATR máximo de la vela M5 (USD de precio): evita picos anómalos
+input double InpSlippageUSD          = 0.30;  // Desviación máxima por orden (USD de precio)
 input int    InpMaxOrderRetries      = 3;     // Reintentos ante requote
 
 input group "=== FILTRO DE HORARIO (hora del servidor) ==="
@@ -304,13 +304,19 @@ struct BasketStats
 
 #define PANEL_PREFIX "SMBP_"
 
+// Las distancias de precio se configuran en USD (unidades de precio del oro) y se
+// convierten a puntos aquí, porque el valor del punto cambia con los decimales del
+// símbolo (XAUUSD a 2 decimales: 0.01; XAUUSDm/XAUUSDc de Exness a 3 decimales: 0.001).
+double UsdToPoints(double usd) { return (_Point > 0.0) ? usd / _Point : 0.0; }
+double PointsToUsd(double pts) { return pts * _Point; }
+
 //+------------------------------------------------------------------+
 //| OnInit                                                            |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    trade.SetExpertMagicNumber(InpMagicNumber);
-   trade.SetDeviationInPoints(InpSlippagePoints);
+   trade.SetDeviationInPoints((ulong)MathMax(1.0, UsdToPoints(InpSlippageUSD)));
    trade.SetTypeFillingBySymbol(_Symbol);
    trade.SetAsyncMode(false);
 
@@ -567,7 +573,7 @@ bool IsWeekEdgeBlocked(datetime t)
 bool IsSpreadAcceptable()
 {
    long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-   return (spread > 0 && spread <= (long)InpMaxSpreadPoints);
+   return (spread > 0 && (double)spread <= UsdToPoints(InpMaxSpreadUSD));
 }
 
 // ATR de la vela cerrada, en precio (no en puntos)
@@ -584,7 +590,7 @@ bool IsVolatilityAcceptable(double &atrPointsOut)
    double atr = GetATR();
    if(atr <= 0.0) { atrPointsOut = 0.0; return false; }
    atrPointsOut = atr / _Point;
-   return (atrPointsOut >= InpATRMinPoints && atrPointsOut <= InpATRMaxPoints);
+   return (atrPointsOut >= UsdToPoints(InpATRMinUSD) && atrPointsOut <= UsdToPoints(InpATRMaxUSD));
 }
 
 // Consulta el calendario UNA vez por minuto: bloqueo actual y próxima noticia de alto impacto (24 h)
@@ -657,14 +663,14 @@ bool EntryFiltersOk(string &reason, bool forNewBasket)
    if(forNewBasket && IsWednesdayBlocked(now))      { reason = "Día de swap triple: sin cestas nuevas"; return false; }
    if(!IsSpreadAcceptable())
    {
-      reason = StringFormat("Spread %d > %.0f pts", (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), InpMaxSpreadPoints);
+      reason = StringFormat("Spread %.2f > %.2f USD", PointsToUsd((double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD)), InpMaxSpreadUSD);
       return false;
    }
    if(InpNewsMode != NEWS_IGNORE && IsNewsBlackout()) { reason = "Noticia de alto impacto"; return false; }
    double atrPts = 0.0;
    if(!IsVolatilityAcceptable(atrPts))
    {
-      reason = StringFormat("ATR %.0f pts fuera de [%.0f, %.0f]", atrPts, InpATRMinPoints, InpATRMaxPoints);
+      reason = StringFormat("ATR %.2f USD fuera de [%.2f, %.2f]", PointsToUsd(atrPts), InpATRMinUSD, InpATRMaxUSD);
       return false;
    }
    return true;
@@ -919,7 +925,7 @@ double BasketTargetMoney(const BasketStats &s)
    {
       case TGT_PERCENT_BALANCE: return g_basketOpenBalance * InpTargetPercent / 100.0;
       case TGT_FIXED_MONEY:     return InpTargetMoney;
-      case TGT_POINTS_FROM_AVG: return InpTargetPoints * s.lots * PointValuePerLot();
+      case TGT_USD_FROM_AVG:    return UsdToPoints(InpTargetUSDFromAvg) * s.lots * PointValuePerLot();
    }
    return 0.0;
 }
@@ -1050,9 +1056,9 @@ int OpenBurst(int dir, int count, double lots, int levelIdx, double &avgFill)
       if(n > 0 && InpBurstDelayMs > 0) Sleep(InpBurstDelayMs);   // Sleep se ignora en el Strategy Tester
 
       long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-      if(spread > (long)InpBurstMaxSpreadPoints)
+      if((double)spread > UsdToPoints(InpBurstMaxSpreadUSD))
       {
-         PrintFormat("Ráfaga detenida en %d/%d: spread %d > %.0f pts.", n, count, (int)spread, InpBurstMaxSpreadPoints);
+         PrintFormat("Ráfaga detenida en %d/%d: spread %.2f > %.2f USD.", n, count, PointsToUsd((double)spread), InpBurstMaxSpreadUSD);
          break;
       }
 
@@ -1065,10 +1071,10 @@ int OpenBurst(int dir, int count, double lots, int levelIdx, double &avgFill)
       opened++;
       sumFill += fill;
       if(firstFill == 0.0) firstFill = fill;
-      else if(MathAbs(fill - firstFill) / _Point > InpBurstMaxSlippagePoints)
+      else if(MathAbs(fill - firstFill) > InpBurstMaxSlippageUSD)
       {
-         PrintFormat("Ráfaga detenida en %d/%d: deslizamiento %.0f pts > %.0f.", opened, count,
-                     MathAbs(fill - firstFill) / _Point, InpBurstMaxSlippagePoints);
+         PrintFormat("Ráfaga detenida en %d/%d: deslizamiento %.2f USD > %.2f.", opened, count,
+                     MathAbs(fill - firstFill), InpBurstMaxSlippageUSD);
          break;
       }
    }
@@ -1243,7 +1249,7 @@ void ClosePositionsInProfit()
       if(ticket == 0 || !IsOurPosition()) continue;
       double lots = 0.0;
       double net = SelectedPositionNet(lots);
-      double target = InpPerPositionTargetPoints * lots * pvpl;
+      double target = UsdToPoints(InpPerPositionTargetUSD) * lots * pvpl;
       if(net >= target)
       {
          if(trade.PositionClose(ticket))
@@ -2080,7 +2086,7 @@ void PanelUpdate()
    // ---------- líneas del panel ----------
    g_lnN = 0;
    L(StringFormat("RAFAGA  |  %s  |  %s  |  %s", _Symbol, ScreenName(), TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS)), 0);
-   L(StringFormat("Oro %s    spread %d pts    ATR %.0f pts", DoubleToString(bid, _Digits), (int)spread, atrPts), 3, GWB_ACENTO);
+   L(StringFormat("Oro %s    spread %.2f USD    ATR M5 %.2f USD    punto=%s", DoubleToString(bid, _Digits), PointsToUsd((double)spread), PointsToUsd(atrPts), DoubleToString(_Point, _Digits)), 3, GWB_ACENTO);
 
    if(halted)
    {
@@ -2115,7 +2121,7 @@ void PanelUpdate()
    string tgtTxt;
    if(InpTargetMode == TGT_PERCENT_BALANCE) tgtTxt = StringFormat("%.2f%% del balance", InpTargetPercent);
    else if(InpTargetMode == TGT_FIXED_MONEY) tgtTxt = "fija";
-   else tgtTxt = StringFormat("%.0f pts desde el medio", InpTargetPoints);
+   else tgtTxt = StringFormat("%.2f USD desde el medio", InpTargetUSDFromAvg);
    L(StringFormat("  meta cesta +%.2f (%s)   faltan %.2f", target, tgtTxt, MathMax(0.0, target - s.net)));
    if(open) L(StringFormat("  precio meta ~ %s  (línea verde, a %.0f pts)", DoubleToString(targetPrice, _Digits), ptsTarget), 3, InpLineTargetColor);
    L(StringFormat("  progreso [%s] %3.0f%%", ProgressBar(progress, 24), progress * 100.0), 3, (progress >= 1.0 ? GWB_OK : GWB_TEXTO));
@@ -2157,8 +2163,8 @@ void PanelUpdate()
    // FILTROS
    L("FILTROS", 1);
    L("  sesión    " + SessionText(), 3, (IsWithinTradingSession(TimeCurrent()) ? GWB_OK : GWB_AVISO));
-   L(StringFormat("  spread    %d / %.0f pts     ATR %.0f pts [%.0f - %.0f]", (int)spread, InpMaxSpreadPoints, atrPts, InpATRMinPoints, InpATRMaxPoints),
-     3, ((spread <= (long)InpMaxSpreadPoints && atrPts >= InpATRMinPoints && atrPts <= InpATRMaxPoints) ? GWB_TEXTO : GWB_AVISO));
+   L(StringFormat("  spread    %.2f / %.2f USD     ATR M5 %.2f USD [%.2f - %.2f]", PointsToUsd((double)spread), InpMaxSpreadUSD, PointsToUsd(atrPts), InpATRMinUSD, InpATRMaxUSD),
+     3, (((double)spread <= UsdToPoints(InpMaxSpreadUSD) && atrPts >= UsdToPoints(InpATRMinUSD) && atrPts <= UsdToPoints(InpATRMaxUSD)) ? GWB_TEXTO : GWB_AVISO));
    string newsTxt;
    if(InpNewsMode == NEWS_IGNORE) newsTxt = "filtro desactivado";
    else if(g_newsBlackout) newsTxt = "BLOQUEO ACTIVO (-" + IntegerToString(InpNewsMinutesBefore) + "/+" + IntegerToString(InpNewsMinutesAfter) + " min)";

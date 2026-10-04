@@ -25,4 +25,4 @@ desktop.ini
 .idea/
 
 # Reportes/resultados del Strategy Tester (se regeneran en cada backtest)
-*.htm
+# *.htm  (los informes del tester SÍ se versionan en backtests/)
