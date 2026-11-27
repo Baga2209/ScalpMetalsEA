@@ -29,3 +29,4 @@ desktop.ini
 
 # Archivos locales de graphify (rutas de la máquina)
 graphify-out/.graphify_*
+graphify-out/cache/
