@@ -26,3 +26,7 @@ desktop.ini
 
 # Reportes/resultados del Strategy Tester (se regeneran en cada backtest)
 *.htm
+
+# Archivos locales de graphify (rutas de la máquina)
+graphify-out/.graphify_*
+graphify-out/cache/

@@ -133,6 +133,10 @@ datetime g_lastBarTime = 0;      // control de nueva vela
 string   g_gvPrefix = "";        // prefijo de variables globales de terminal (persistentes y compartidas entre instancias del EA)
 bool     g_dailyHaltAlerted  = false;
 bool     g_globalHaltAlerted = false;
+double   g_cfSeenBalance = -1.0;     // último balance visto por el detector de depósitos/retiros
+double   g_cfSeenCredit  = -1.0;     // último crédito visto por el detector de depósitos/retiros
+datetime g_cfLastScan    = 0;        // última revisión del historial en busca de depósitos/retiros
+bool     g_cfRescan      = true;     // forzar revisión en el siguiente tick
 
 //+------------------------------------------------------------------+
 //| OnInit                                                            |
@@ -547,6 +551,133 @@ void InitRiskTrackingIfNeeded()
    GVGetOrInit("DayStamp", (double)(TimeCurrent() / 86400));
    GVGetOrInit("EquityPeak", equity);
    GVGetOrInit("GlobalHalted", 0.0);
+
+   // Marcas de tiempo para el ajuste por depósitos/retiros. Se crean una sola vez; lo que
+   // haya en el historial ANTES de estas marcas ya está incluido en el balance/equity con
+   // el que se inicializó el tracking, así que no se vuelve a contar.
+   if(!GlobalVariableCheck(GVName("LastCashflowMsc")) || !GlobalVariableCheck(GVName("DayStartSetMsc")))
+   {
+      double nowMsc = CashflowMarkerNowMsc();
+      GVGetOrInit("LastCashflowMsc", nowMsc);
+      GVGetOrInit("DayStartSetMsc", nowMsc);
+   }
+}
+
+// --- Ajuste del tracking por depósitos y retiros ---
+// Un retiro baja el equity sin ser una pérdida, y un depósito lo sube sin ser una ganancia.
+// Sin este ajuste, un retiro se leería como drawdown (y podría activar el paro global
+// permanente) y un depósito escondería pérdidas reales. Aquí se detectan las operaciones
+// de balance en el historial y se desplazan EquityPeak y DayStartBalance por el mismo importe.
+
+datetime ServerNow()
+{
+   datetime a = TimeCurrent();
+   datetime b = TimeTradeServer();
+   return (b > a) ? b : a;
+}
+
+// Devuelve, en milisegundos, el más reciente entre "ahora" y el último deal del historial.
+// Garantiza que todo deal ya existente quede ANTES de la marca.
+double CashflowMarkerNowMsc()
+{
+   long nowMsc = (long)ServerNow() * 1000;
+   if(HistorySelect(0, (datetime)((long)ServerNow() + 86400)))
+   {
+      int total = HistoryDealsTotal();
+      if(total > 0)
+      {
+         ulong ticket = HistoryDealGetTicket(total - 1);
+         if(ticket > 0)
+         {
+            long lastMsc = HistoryDealGetInteger(ticket, DEAL_TIME_MSC);
+            if(lastMsc > nowMsc) nowMsc = lastMsc;
+         }
+      }
+   }
+   return (double)nowMsc;
+}
+
+bool IsCashflowDeal(ENUM_DEAL_TYPE type)
+{
+   return (type == DEAL_TYPE_BALANCE || type == DEAL_TYPE_CREDIT ||
+           type == DEAL_TYPE_CORRECTION || type == DEAL_TYPE_BONUS);
+}
+
+void ApplyCashflowAdjustments()
+{
+   // Solo se revisa el historial cuando cambió el balance o el crédito de la cuenta,
+   // o como red de seguridad cada 10 segundos.
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double credit  = AccountInfoDouble(ACCOUNT_CREDIT);
+   datetime now   = ServerNow();
+   bool changed   = (balance != g_cfSeenBalance || credit != g_cfSeenCredit);
+   if(!changed && !g_cfRescan && (now - g_cfLastScan) < 10)
+      return;
+
+   string markerName = GVName("LastCashflowMsc");
+   if(!GlobalVariableCheck(markerName))
+      return; // se crea en InitRiskTrackingIfNeeded()
+
+   double marker    = GlobalVariableGet(markerName);
+   long   markerMsc = (long)marker;
+   if(!HistorySelect((datetime)(markerMsc / 1000), (datetime)((long)now + 86400)))
+      return; // historial no disponible todavía: se reintenta en el siguiente tick
+
+   long   dayStartSetMsc = (long)GVGetOrInit("DayStartSetMsc", marker);
+   double sumAll   = 0.0;       // total de depósitos/retiros nuevos
+   double sumToday = 0.0;       // los ocurridos después de fijar el balance de inicio de día
+   long   newestMsc = markerMsc;
+
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      long msc = HistoryDealGetInteger(ticket, DEAL_TIME_MSC);
+      if(msc <= markerMsc) continue;
+      if(msc > newestMsc) newestMsc = msc;
+
+      if(!IsCashflowDeal((ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE))) continue;
+      double amount = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      sumAll += amount;
+      if(msc > dayStartSetMsc) sumToday += amount;
+   }
+
+   g_cfSeenBalance = balance;
+   g_cfSeenCredit  = credit;
+   g_cfLastScan    = now;
+   g_cfRescan      = false;
+
+   if(newestMsc == markerMsc)
+      return; // nada nuevo en el historial
+
+   // Avance atómico de la marca: si otra instancia del EA (otro símbolo, misma cuenta) ya
+   // procesó estos deals, la condición falla y aquí no se aplica nada, para no ajustar dos veces.
+   if(!GlobalVariableSetOnCondition(markerName, (double)newestMsc, marker))
+   {
+      g_cfRescan = true; // revisar de nuevo desde la marca actualizada
+      return;
+   }
+
+   if(sumAll == 0.0)
+      return;
+
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double peak    = GVGetOrInit("EquityPeak", equity);
+   double newPeak = peak + sumAll;
+   if(newPeak <= 0.0) newPeak = equity;
+   GlobalVariableSet(GVName("EquityPeak"), newPeak);
+
+   if(sumToday != 0.0)
+   {
+      double dayStart    = GVGetOrInit("DayStartBalance", balance);
+      double newDayStart = dayStart + sumToday;
+      if(newDayStart <= 0.0) newDayStart = balance;
+      GlobalVariableSet(GVName("DayStartBalance"), newDayStart);
+   }
+
+   PrintFormat("Depósito/retiro detectado (%.2f): pico de equity ajustado de %.2f a %.2f; ajuste al balance de inicio de día: %.2f.",
+               sumAll, peak, newPeak, sumToday);
 }
 
 void UpdateEquityTracking()
@@ -559,10 +690,17 @@ void UpdateEquityTracking()
       // Nuevo día de trading: reiniciar el contador de drawdown diario.
       GlobalVariableSet(GVName("DayStamp"), today);
       GlobalVariableSet(GVName("DayStartBalance"), AccountInfoDouble(ACCOUNT_BALANCE));
+      // Este balance ya incluye todo depósito/retiro anterior a este instante: se marca
+      // el momento para que el ajuste diario solo cuente los posteriores.
+      GlobalVariableSet(GVName("DayStartSetMsc"), CashflowMarkerNowMsc());
       g_dailyHaltAlerted = false;
       if(InpVerboseLogging)
          Print("Nuevo día de trading detectado: contador de drawdown diario reiniciado.");
    }
+
+   // Antes de medir drawdown: descontar depósitos y retiros para que no cuenten como
+   // ganancia o pérdida.
+   ApplyCashflowAdjustments();
 
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double peak   = GVGetOrInit("EquityPeak", equity);
